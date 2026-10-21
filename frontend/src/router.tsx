@@ -1,6 +1,8 @@
 import { createBrowserRouter, Link } from 'react-router';
 import { AppShell, type NavItem } from '@/components/AppShell';
 import { EmptyState } from '@/components/States';
+import { AdminTicketPage } from '@/features/admin/AdminTicketPage';
+import { QueuePage } from '@/features/admin/QueuePage';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { HomeRedirect, RequireRole } from '@/features/auth/RequireRole';
 import { BooksPage } from '@/features/books/BooksPage';
@@ -26,10 +28,6 @@ function NotFound() {
   );
 }
 
-function AdminPlaceholder() {
-  return <EmptyState title="Admin portal">Coming next.</EmptyState>;
-}
-
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   { path: '/', element: <HomeRedirect /> },
@@ -53,8 +51,8 @@ export const router = createBrowserRouter([
       {
         element: <AppShell nav={adminNav} area="Support Admin" />,
         children: [
-          { path: '/admin', element: <AdminPlaceholder /> },
-          { path: '/admin/tickets/:id', element: <AdminPlaceholder /> },
+          { path: '/admin', element: <QueuePage /> },
+          { path: '/admin/tickets/:id', element: <AdminTicketPage /> },
         ],
       },
     ],

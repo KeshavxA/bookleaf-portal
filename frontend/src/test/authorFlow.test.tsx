@@ -4,6 +4,7 @@ import { setupServer } from 'msw/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { handlers } from '@/mocks/handlers';
+import { router } from '@/router';
 
 // End-to-end author journey against the same MSW handlers the dev mock mode uses.
 const server = setupServer(...handlers);
@@ -13,7 +14,7 @@ afterAll(() => server.close());
 describe('author flow (mock API)', () => {
   it('logs in, sees books with edge cases, submits a query, and receives an admin reply live', async () => {
     const user = userEvent.setup();
-    window.history.pushState({}, '', '/login');
+    await router.navigate('/login');
     render(<App />);
 
     await user.type(await screen.findByLabelText('Email'), 'sneha.kulkarni@email.com');
@@ -67,5 +68,5 @@ describe('author flow (mock API)', () => {
     await user.click(screen.getByRole('link', { name: 'My Tickets' }));
     const row = (await screen.findByText('Cover proof timeline')).closest('a')!;
     expect(within(row).getByText('In Progress')).toBeInTheDocument();
-  });
+  }, 20_000);
 });

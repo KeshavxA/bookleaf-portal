@@ -3,22 +3,23 @@ import { useEffect, useRef, useState } from 'react';
 /**
  * Returns the time the signature last changed after the first value was seen, or null.
  * The first value is a baseline, so a page load never shows "updated just now".
+ * Changing `scope` (e.g. the active filters) starts a new baseline, so a change the user made
+ * themselves isn't reported as a live update.
  */
-export function useChangeCue(signature: string | undefined) {
-  const baseline = useRef<string | undefined>(undefined);
+export function useChangeCue(signature: string | undefined, scope = '') {
+  const baseline = useRef<{ scope: string; signature: string } | null>(null);
   const [changedAt, setChangedAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (signature === undefined) return;
-    if (baseline.current === undefined) {
-      baseline.current = signature;
+    const prev = baseline.current;
+    baseline.current = { scope, signature };
+    if (!prev || prev.scope !== scope) {
+      if (prev) setChangedAt(null);
       return;
     }
-    if (baseline.current !== signature) {
-      baseline.current = signature;
-      setChangedAt(Date.now());
-    }
-  }, [signature]);
+    if (prev.signature !== signature) setChangedAt(Date.now());
+  }, [signature, scope]);
 
   return changedAt;
 }
