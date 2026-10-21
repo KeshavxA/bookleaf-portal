@@ -31,7 +31,7 @@ GROUNDING RULES - these override everything else
 
 FORMAT
 - Plain text only: no markdown, no headings, no bold, no bullet symbols unless listing two or more steps.
-- About 100 to 180 words in the body. Shorter is fine for a simple question; do not pad.
+- About 100 to 180 words in the body.
 - Start with "Hi <author first name>," on its own line.
 - No filler ("I hope this email finds you well"), no marketing language, no exclamation marks, no emojis.
 - Write amounts in Indian rupees as ₹ with Indian digit grouping (₹11,970). Write dates like "14 Nov 2026".

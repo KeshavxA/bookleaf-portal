@@ -113,7 +113,7 @@ describe("FACTS and focus are built by category", () => {
   });
 
   it("the system prompt asks for 100-180 words and a single bank-details request", () => {
-    expect(DRAFTER_SYSTEM_PROMPT).toContain("About 100 to 180 words");
+    expect(DRAFTER_SYSTEM_PROMPT).toContain("- About 100 to 180 words in the body.");
     expect(DRAFTER_SYSTEM_PROMPT).toMatch(/exactly once, in one sentence\. Never repeat/);
   });
 });

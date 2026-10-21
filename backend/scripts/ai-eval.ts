@@ -5,7 +5,11 @@
  * Runs ~12 tickets (the KB's sample queries plus edge cases) through the real
  * classifier and drafter of the configured provider (LLM_PROVIDER / LLM_MODEL),
  * using facts built from the seed dataset. Prints expected vs actual triage, the
- * draft, and token cost. No database needed. Requires the selected provider's key.
+ * draft, and token cost, then a pass/fail table of automatic draft checks
+ * (src/ai/drafter/checks.ts): length (target 100-180 words, WARN for 80-220), bank
+ * details asked at most once, no royalty/payout/bank text on non-payment tickets,
+ * house date format, no ungrounded numbers. No database needed. Requires the
+ * selected provider's key.
  *
  * A failed call (rate limit, quota, timeout) is reported for that ticket and the
  * run continues. A pause between calls keeps a free-tier key under its per-minute
@@ -22,6 +26,7 @@ import { ConfigError, parseEnv } from "../src/config/schema";
 import { TicketClassifier } from "../src/ai/classifier/classifier";
 import { TicketDrafter } from "../src/ai/drafter/drafter";
 import type { DraftBookInput, DraftContext } from "../src/ai/drafter/types";
+import { bodyWordCount, checkDraft, type DraftCheck } from "../src/ai/drafter/checks";
 import type { Category, Priority } from "../src/domain/enums";
 
 interface EvalCase {
@@ -206,11 +211,13 @@ async function main() {
   const classifier = new TicketClassifier(llm);
   const drafter = new TicketDrafter(llm);
 
+  const checkRows: CheckRow[] = [];
   let correctCategory = 0;
   let acceptablePriority = 0;
   const line = "─".repeat(78);
 
-  for (const [i, c] of cases.entries()) {
+  for (const c of cases) {
+    const i = CASES.indexOf(c); // stable case number, also with --only
     const author = data.authors.find((a) => a.email === c.authorEmail)!;
     const rawBook = c.bookId ? author.books.find((b) => b.book_id === c.bookId)! : null;
     const book = rawBook ? toBook(rawBook) : null;
@@ -263,13 +270,19 @@ async function main() {
     await pace();
     try {
       const draft = await drafter.draft(ctx);
-      const words = draft.body.split(/\s+/).length;
-      console.log(`\nDraft (${words} words):\n${draft.body}`);
+      console.log(`\nDraft (${bodyWordCount(draft.body)} words in the body):\n${draft.body}`);
       if (draft.ungroundedNumbers.length) console.log(`⚠ numbers not found in sources: ${draft.ungroundedNumbers.join(", ")}`);
+      for (const w of draft.warnings) console.log(`⚠ ${w}`);
+      const checks = checkDraft(draft.body, ctx, draft.ungroundedNumbers);
+      const flagged = checks.filter((c) => c.status === "fail" || c.status === "warn");
+      if (flagged.length) console.log(`Checks: ${flagged.map((c) => `${c.name} ${c.status.toUpperCase()} (${c.detail})`).join("; ")}`);
+      checkRows.push({ n: i + 1, category: ctx.ticket.category, checks });
     } catch (err) {
       // Per-ticket failure (rate limit, quota, timeout, bad output): report it and keep going.
       const code = err instanceof LlmError ? `${err.code}: ` : "";
-      console.log(`\nDraft failed: ${code}${err instanceof Error ? err.message : String(err)}`);
+      const msg = `${code}${err instanceof Error ? err.message : String(err)}`;
+      console.log(`\nDraft failed: ${msg}`);
+      checkRows.push({ n: i + 1, category: ctx.ticket.category, checks: null, error: msg });
     }
   }
 
@@ -280,6 +293,8 @@ async function main() {
     const rs = records.filter((r) => r.kind === kind && r.status === "SUCCESS");
     return rs.length ? Math.round(rs.reduce((n, r) => n + r.latencyMs, 0) / rs.length) : 0;
   };
+
+  if (withDraft) printCheckTable(checkRows);
 
   console.log(`\n${line}\nSUMMARY (${cfg.LLM_PROVIDER} / ${llm.model})\n${line}`);
   console.log(`Category correct: ${correctCategory}/${cases.length}   Priority acceptable: ${acceptablePriority}/${cases.length}`);
@@ -295,6 +310,49 @@ async function main() {
     `Estimated cost: $${cost.toFixed(5)} (≈ $${(cost / cases.length).toFixed(5)} per ticket)` +
       (cfg.LLM_PROVIDER === "gemini" && cost === 0 ? "  [GEMINI_PRICE_* = 0: free-tier default, not a real price]" : ""),
   );
+}
+
+interface CheckRow {
+  n: number;
+  category: string;
+  checks: DraftCheck[] | null;
+  error?: string;
+}
+
+const MARK: Record<DraftCheck["status"], string> = { pass: "PASS", warn: "WARN", fail: "FAIL", "n/a": "n/a" };
+const CHECK_NAMES: DraftCheck["name"][] = ["length", "bank once", "no off-topic money", "dates", "numbers grounded"];
+
+function printCheckTable(rows: CheckRow[]) {
+  const cols = ["#", "category", "length", "bank once", "no off-topic money", "dates", "numbers grounded"];
+  const widths = [2, 25, 9, 9, 18, 5, 16];
+  const fmt = (cells: string[]) => cells.map((c, i) => c.padEnd(widths[i]!)).join(" | ");
+  console.log(`\n${"─".repeat(78)}\nDRAFT CHECKS (length = body words; PASS 100-180, WARN 80-220, else FAIL)\n${"─".repeat(78)}`);
+  console.log(fmt(cols));
+  for (const r of rows) {
+    if (!r.checks) {
+      console.log(`${String(r.n).padEnd(2)} | ${r.category.padEnd(25)} | draft failed: ${r.error}`);
+      continue;
+    }
+    const by = Object.fromEntries(r.checks.map((c) => [c.name, c])) as Record<DraftCheck["name"], DraftCheck>;
+    console.log(
+      fmt([
+        String(r.n),
+        r.category,
+        `${MARK[by.length.status]} ${by.length.detail.replace(" words", "")}`,
+        ...CHECK_NAMES.slice(1).map((n) => MARK[by[n].status]),
+      ]),
+    );
+  }
+  const done = rows.filter((r) => r.checks);
+  console.log(`\nTotals over ${done.length} drafts (${rows.length - done.length} failed to generate):`);
+  for (const name of CHECK_NAMES) {
+    const st = done.map((r) => r.checks!.find((c) => c.name === name)!.status);
+    const parts = (["pass", "warn", "fail", "n/a"] as const)
+      .map((s) => [s, st.filter((x) => x === s).length] as const)
+      .filter(([, n]) => n > 0)
+      .map(([s, n]) => `${n} ${MARK[s]}`);
+    console.log(`  ${name.padEnd(18)} ${parts.join(", ")}`);
+  }
 }
 
 main().catch((err) => {
