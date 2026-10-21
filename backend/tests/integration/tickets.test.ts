@@ -3,7 +3,21 @@ import request from "supertest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type Anthropic from "@anthropic-ai/sdk";
-import { ADMIN, PRIYA, ROHIT, buildTestApp, failingSdk, fakeMessage, llmWithFakeSdk, login, prisma, resetTickets } from "../helpers";
+import {
+  ADMIN,
+  PRIYA,
+  ROHIT,
+  buildTestApp,
+  failingSdk,
+  fakeGeminiResponse,
+  fakeMessage,
+  geminiApiError,
+  llmWithFakeGemini,
+  llmWithFakeSdk,
+  login,
+  prisma,
+  resetTickets,
+} from "../helpers";
 
 const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
 
@@ -173,6 +187,73 @@ describe("ticket lifecycle with a working LLM", () => {
     const res = await request(app).post(`/api/v1/tickets/${ticketId}/messages`).set(auth(priya)).send({ body: "hello?" });
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("CONFLICT");
+  });
+});
+
+describe("Gemini provider, end to end", () => {
+  it("classifies and drafts through Gemini, logging provider gemini", async () => {
+    const draftText = `Hi Priya,\n\n${"We are checking your royalty payment and will update you within 48 hours. ".repeat(5)}\n\nWarm regards,\nBookLeaf Support Team`;
+    const { app, container } = buildTestApp(
+      llmWithFakeGemini(async (params) =>
+        params.config?.responseSchema
+          ? fakeGeminiResponse(JSON.stringify({ category: "ROYALTY_PAYMENTS", priority: "HIGH", reasoning: "Pending royalty" }))
+          : fakeGeminiResponse(draftText),
+      ),
+    );
+    const [priya, admin] = await Promise.all([login(app, PRIYA), login(app, ADMIN)]);
+    await resetTickets();
+    const created = await request(app)
+      .post("/api/v1/tickets")
+      .set(auth(priya))
+      .send({ bookId: "BK001", subject: "Pending royalty", description: "When will my pending royalty be paid?" });
+    await container.queue.onIdle();
+    const draft = await request(app).post(`/api/v1/admin/tickets/${created.body.id}/draft`).set(auth(admin)).send({});
+    expect(draft.body.draft).toMatchObject({ source: "AI" });
+
+    const t = await request(app).get(`/api/v1/admin/tickets/${created.body.id}`).set(auth(admin));
+    expect(t.body).toMatchObject({ aiStatus: "DONE", category: "ROYALTY_PAYMENTS", priority: "HIGH" });
+    const calls = await prisma.aiCall.findMany({ where: { ticketId: created.body.id }, orderBy: { createdAt: "asc" } });
+    expect(calls.map((c) => [c.kind, c.provider, c.status])).toEqual([
+      ["CLASSIFY", "gemini", "SUCCESS"],
+      ["DRAFT", "gemini", "SUCCESS"],
+    ]);
+    expect(Number(calls[0]!.estCost)).toBe(0);
+  });
+
+  it("an exhausted quota degrades the app: keyword triage, then draft=null with an error", async () => {
+    let calls = 0;
+    const { app, container } = buildTestApp(
+      llmWithFakeGemini(async () => {
+        calls++;
+        throw geminiApiError(429, {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "You exceeded your current quota.",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+              violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }],
+            },
+          ],
+        });
+      }),
+    );
+    const [priya, admin] = await Promise.all([login(app, PRIYA), login(app, ADMIN)]);
+    await resetTickets();
+    const created = await request(app)
+      .post("/api/v1/tickets")
+      .set(auth(priya))
+      .send({ bookId: "BK001", subject: "ISBN wrong", description: "The ISBN on Amazon differs from my printed copy." });
+    expect(created.status).toBe(201);
+    await container.queue.onIdle();
+
+    const t = await request(app).get(`/api/v1/admin/tickets/${created.body.id}`).set(auth(admin));
+    expect(t.body).toMatchObject({ aiStatus: "FAILED", category: "ISBN_METADATA", priority: "HIGH" });
+
+    const draft = await request(app).post(`/api/v1/admin/tickets/${created.body.id}/draft`).set(auth(admin)).send({});
+    expect(draft.status).toBe(200);
+    expect(draft.body).toMatchObject({ draft: null, error: { code: "AI_CIRCUIT_OPEN" } });
+    expect(calls).toBe(1); // the breaker kept the draft request away from the API
   });
 });
 

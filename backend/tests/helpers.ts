@@ -1,10 +1,12 @@
 import request from "supertest";
 import Anthropic from "@anthropic-ai/sdk";
+import { ApiError, type GenerateContentParameters, type GenerateContentResponse } from "@google/genai";
 import { buildContainer } from "../src/container";
 import { createApp } from "../src/app";
 import { prisma } from "../src/lib/prisma";
 import { LlmClient } from "../src/ai/llm/client";
 import { AnthropicProvider } from "../src/ai/llm/providers/anthropic";
+import { GeminiProvider } from "../src/ai/llm/providers/gemini";
 import { CircuitBreaker } from "../src/ai/llm/circuitBreaker";
 import { AiCallRepository } from "../src/repositories/aiCallRepository";
 import type { LlmPort } from "../src/ai/llm/types";
@@ -30,6 +32,43 @@ export function llmWithFakeSdk(create: FakeCreate, opts: { threshold?: number } 
     recorder: new AiCallRepository(prisma),
     sleep: async () => {},
   });
+}
+
+type FakeGenerate = (params: GenerateContentParameters) => Promise<unknown>;
+
+/** A real LlmClient over a GeminiProvider with a fake @google/genai transport. */
+export function llmWithFakeGemini(generate: FakeGenerate, opts: { threshold?: number } = {}): LlmClient {
+  return new LlmClient({
+    provider: new GeminiProvider({
+      apiKey: "test-gemini-key",
+      model: "gemini-3.5-flash-lite",
+      classifierThinking: "minimal",
+      price: { inputPerMTok: 0, outputPerMTok: 0 },
+      sdk: { models: { generateContent: generate } } as never,
+    }),
+    timeoutMs: 1000,
+    maxRetries: 2,
+    breaker: new CircuitBreaker({ threshold: opts.threshold ?? 100, cooldownMs: 60_000 }),
+    recorder: new AiCallRepository(prisma),
+    sleep: async () => {},
+  });
+}
+
+/** Plain-object stand-in for GenerateContentResponse (the provider reads only these fields). */
+export function fakeGeminiResponse(
+  text: string,
+  opts: { finishReason?: string; usage?: Record<string, number> } = {},
+): GenerateContentResponse {
+  return {
+    candidates: [{ content: { role: "model", parts: [{ text }] }, finishReason: opts.finishReason ?? "STOP" }],
+    usageMetadata: opts.usage ?? { promptTokenCount: 120, candidatesTokenCount: 30 },
+    modelVersion: "gemini-3.5-flash-lite",
+  } as unknown as GenerateContentResponse;
+}
+
+/** An SDK ApiError whose message is the JSON error body, as @google/genai builds it. */
+export function geminiApiError(status: number, error: Record<string, unknown>): ApiError {
+  return new ApiError({ status, message: JSON.stringify({ error }) });
 }
 
 export const failingSdk: FakeCreate = async () => {
