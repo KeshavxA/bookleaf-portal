@@ -1,15 +1,20 @@
-import { env } from "./config/env";
+import { env, envSummary } from "./config/env";
 import { logger } from "./lib/logger";
 import { buildContainer } from "./container";
 import { createApp } from "./app";
 
 async function main() {
+  logger.info({ config: envSummary(env) }, "Configuration loaded");
+  if (!env.ANTHROPIC_API_KEY) {
+    logger.warn("ANTHROPIC_API_KEY is not set: AI is in degraded mode (keyword triage, no drafts; admins reply manually)");
+  }
+
   const container = buildContainer();
   const app = createApp(container);
 
   const server = app.listen(env.PORT, () => {
     logger.info(
-      { port: env.PORT, model: env.LLM_MODEL, ai: env.ANTHROPIC_API_KEY ? "enabled" : "disabled (no ANTHROPIC_API_KEY)" },
+      { port: env.PORT },
       "BookLeaf API listening",
     );
   });
