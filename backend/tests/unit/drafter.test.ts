@@ -73,7 +73,16 @@ describe("FACTS block", () => {
   });
 
   it("leaves royalty figures out of non-money categories (token discipline)", () => {
-    const facts = buildFacts(ctx({ ticket: { ...ctx().ticket, category: "PRINTING_QUALITY" } }));
+    const facts = buildFacts(
+      ctx({
+        ticket: {
+          ...ctx().ticket,
+          category: "PRINTING_QUALITY",
+          subject: "Blurry author copies",
+          description: "The images in my author copies are blurry.",
+        },
+      }),
+    );
     expect(facts).not.toMatch(/Royalty earned|Next scheduled payout/);
     expect(facts).toContain("Print partner: Epitome Books");
   });

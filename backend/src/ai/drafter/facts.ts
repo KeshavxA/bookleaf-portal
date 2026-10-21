@@ -2,36 +2,52 @@ import { assessRoyalty, MIN_PAYOUT_THRESHOLD_INR } from "../../domain/payout";
 import { daysBetween, formatHumanDate } from "../../lib/dates";
 import type { Category } from "../../domain/enums";
 import type { DraftBookInput, DraftContext } from "./types";
+import { isPaymentRelated } from "./relevance";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
-/** Royalty numbers only help on money-related tickets; elsewhere they are noise (and tokens). */
-const ROYALTY_CATEGORIES: ReadonlySet<Category> = new Set(["ROYALTY_PAYMENTS", "GENERAL_INQUIRY"]);
-
 export function isInProduction(status: string): boolean {
   return /in production/i.test(status);
+}
+
+/** "In Production - Cover Design" -> "Cover Design" */
+export function productionStage(status: string): string | null {
+  const m = /in production\s*[-–:]\s*(.+)$/i.exec(status);
+  return m ? m[1]!.trim() : null;
 }
 
 /**
  * Builds the FACTS block: a compact, human-readable summary computed in code
  * from DB records. All derived values (next payout date, threshold roll-over,
  * payout review flag) are calculated here so the model never does date or money maths.
+ *
+ * Only facts relevant to the ticket are included, because the model tends to use
+ * whatever it is given (the first Gemini eval put royalties and bank details into
+ * a reply about editing a book description):
+ *   - payment-related tickets (ROYALTY_PAYMENTS, or the author wrote about payment):
+ *     bank status, royalty figures, threshold roll-over, next payout date, review flag
+ *   - ISBN_METADATA: the ISBN on record
+ *   - PRINTING_QUALITY: the print partner
+ *   - DISTRIBUTION_AVAILABILITY: the platforms the book is on
+ *   - BOOK_STATUS_PRODUCTION: status and production stage
+ *   - GENERAL_INQUIRY: book title and status only
  */
 export function buildFacts(ctx: DraftContext): string {
   const today = ctx.today ?? new Date();
+  const payment = isPaymentRelated(ctx);
   const lines: string[] = [];
   const firstName = ctx.author.name.split(/\s+/)[0] ?? ctx.author.name;
 
   lines.push(`Today: ${formatHumanDate(today)}`);
   lines.push(`Author: ${ctx.author.name} (address them as ${firstName})`);
-  lines.push(`Bank details linked in dashboard: ${bankLine(ctx.author.bankLinked)}`);
+  if (payment) lines.push(`Bank details linked in dashboard: ${bankLine(ctx.author.bankLinked)}`);
   const age = daysBetween(ctx.ticket.createdAt, today);
   lines.push(
     `Ticket: #${ctx.ticket.ticketNumber}, opened ${formatHumanDate(ctx.ticket.createdAt)} (${age} day${age === 1 ? "" : "s"} ago), status ${ctx.ticket.status}`,
   );
 
   if (ctx.book) {
-    lines.push(...bookLines(ctx.book, ROYALTY_CATEGORIES.has(ctx.ticket.category), today));
+    lines.push(...bookLines(ctx.book, ctx.ticket.category, payment, today));
   } else {
     lines.push("Book: none selected (general / account-level query)");
     if (ctx.author.books.length > 0) {
@@ -44,28 +60,35 @@ export function buildFacts(ctx: DraftContext): string {
 
 function bankLine(bankLinked: boolean | null): string {
   if (bankLinked === true) return "yes";
-  if (bankLinked === false) return "NO - ask the author to link their bank account in the dashboard";
-  return "unknown - if payments are involved, ask the author to confirm their bank details in the dashboard";
+  if (bankLinked === false) return "NO - ask the author once to link their bank account in the dashboard";
+  return "unknown - ask the author once to confirm their bank details in the dashboard";
 }
 
-function bookLines(book: DraftBookInput, includeRoyalty: boolean, today: Date): string[] {
-  const out: string[] = [`Book: "${book.title}"`, `  ISBN on record: ${book.isbn}`];
+function bookLines(book: DraftBookInput, category: Category, payment: boolean, today: Date): string[] {
+  const out: string[] = [`Book: "${book.title}"`];
 
   if (isInProduction(book.status)) {
     out.push(`  Status: ${book.status} - not yet published, so there are no sales or royalties yet`);
+    const stage = productionStage(book.status);
+    if (stage) out.push(`  Current production stage: ${stage}`);
     out.push("  Exact completion date: not in our records (team must confirm)");
+    if (category === "ISBN_METADATA") out.push(`  ISBN on record: ${book.isbn}`);
     return out;
   }
 
   const published = book.publicationDate ? `published ${formatHumanDate(book.publicationDate)}` : "publication date not on record";
   out.push(`  Status: ${book.status} (${published})`);
-  out.push(`  Print partner: ${book.printPartner ?? "not on record"}`);
-  out.push(`  Available on: ${book.availableOn.length ? book.availableOn.join(", ") : "no platforms on record"}`);
-  if (!includeRoyalty) {
-    out.push(`  Copies sold: ${book.totalCopiesSold.toLocaleString("en-IN")}`);
-    return out;
+  if (category === "ISBN_METADATA") out.push(`  ISBN on record: ${book.isbn}`);
+  if (category === "PRINTING_QUALITY") out.push(`  Print partner: ${book.printPartner ?? "not on record"}`);
+  if (category === "DISTRIBUTION_AVAILABILITY") {
+    out.push(`  Available on: ${book.availableOn.length ? book.availableOn.join(", ") : "no platforms on record"}`);
   }
+  if (payment) out.push(...royaltyLines(book, today));
+  return out;
+}
 
+function royaltyLines(book: DraftBookInput, today: Date): string[] {
+  const out: string[] = [];
   out.push(
     `  MRP: ${book.mrp !== null ? inr(book.mrp) : "not set"}; author royalty per copy: ${
       book.authorRoyaltyPerCopy !== null ? inr(book.authorRoyaltyPerCopy) : "not set"

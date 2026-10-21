@@ -4,6 +4,7 @@ import { formatHumanDate } from "../../lib/dates";
 import { escapeTags, userText } from "../promptText";
 import { DRAFTER_SYSTEM_PROMPT } from "./systemPrompt";
 import { buildFacts } from "./facts";
+import { isPaymentRelated } from "./relevance";
 import type { DraftContext } from "./types";
 
 export const THREAD_WINDOW = 6;
@@ -20,6 +21,26 @@ const MESSAGE_MAX_CHARS = 1500;
  * Everything the author (or staff) typed goes through userText(): escaped so it
  * cannot close <original_query>/<thread> or forge a <facts> block, and capped in length.
  */
+/** Per-ticket instructions computed in code (not cached: they vary with category and content). */
+export function focusNotes(ctx: DraftContext): string[] {
+  const notes: string[] = [];
+  if (isPaymentRelated(ctx)) {
+    notes.push("- This ticket is about payment. Use the royalty facts; ask about bank details at most once, and only if FACTS say they are unknown or not linked.");
+  } else {
+    notes.push("- This ticket is not about payment. Do not mention royalties, payouts, payment dates, the payout threshold or bank details.");
+  }
+  const topic: Partial<Record<DraftContext["ticket"]["category"], string>> = {
+    ISBN_METADATA: "- Topic: ISBN or metadata. Refer to the ISBN on record where it helps.",
+    PRINTING_QUALITY: "- Topic: print quality. Refer to the print partner where it helps.",
+    DISTRIBUTION_AVAILABILITY: "- Topic: availability. Refer to the platforms the book is on.",
+    BOOK_STATUS_PRODUCTION: "- Topic: production status. Refer to the current stage; no sales or royalty talk.",
+    GENERAL_INQUIRY: "- Topic: general question. Answer it directly from POLICY; do not add unrelated account details.",
+  };
+  const t = topic[ctx.ticket.category];
+  if (t) notes.push(t);
+  return notes;
+}
+
 export function buildDraftPrompt(ctx: DraftContext): {
   system: SystemBlock[];
   messages: ChatMessage[];
@@ -46,6 +67,10 @@ export function buildDraftPrompt(ctx: DraftContext): {
   const user = `<facts>
 ${facts}
 </facts>
+
+<focus>
+${focusNotes(ctx).join("\n")}
+</focus>
 
 <original_query>
 <subject>${escapeTags(ctx.ticket.subject)}</subject>

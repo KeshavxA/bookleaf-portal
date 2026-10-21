@@ -79,6 +79,9 @@ export class DraftService {
 
     try {
       const result = await this.drafter.draft(ctx);
+      if (result.warnings.length > 0) {
+        this.log.warn({ ticketId, warnings: result.warnings }, "Draft generated with warnings");
+      }
       if (result.ungroundedNumbers.length > 0) {
         this.log.warn({ ticketId, numbers: result.ungroundedNumbers }, "Draft contains numbers not present in its sources");
       }
