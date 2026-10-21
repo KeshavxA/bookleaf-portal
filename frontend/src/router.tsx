@@ -1,0 +1,63 @@
+import { createBrowserRouter, Link } from 'react-router';
+import { AppShell, type NavItem } from '@/components/AppShell';
+import { EmptyState } from '@/components/States';
+import { LoginPage } from '@/features/auth/LoginPage';
+import { HomeRedirect, RequireRole } from '@/features/auth/RequireRole';
+import { BooksPage } from '@/features/books/BooksPage';
+import { NewTicketPage } from '@/features/tickets/NewTicketPage';
+import { TicketDetailPage } from '@/features/tickets/TicketDetailPage';
+import { TicketsPage } from '@/features/tickets/TicketsPage';
+
+const authorNav: NavItem[] = [
+  { to: '/books', label: 'My Books' },
+  { to: '/tickets', label: 'My Tickets', end: true },
+  { to: '/tickets/new', label: 'Submit Query' },
+];
+
+const adminNav: NavItem[] = [{ to: '/admin', label: 'Ticket Queue', end: true }];
+
+function NotFound() {
+  return (
+    <div className="mx-auto max-w-lg px-4 py-16">
+      <EmptyState title="Page not found" action={<Link to="/" className="text-brand-700 hover:underline">Go to your dashboard</Link>}>
+        The page you're looking for doesn't exist.
+      </EmptyState>
+    </div>
+  );
+}
+
+function AdminPlaceholder() {
+  return <EmptyState title="Admin portal">Coming next.</EmptyState>;
+}
+
+export const router = createBrowserRouter([
+  { path: '/login', element: <LoginPage /> },
+  { path: '/', element: <HomeRedirect /> },
+  {
+    element: <RequireRole role="AUTHOR" />,
+    children: [
+      {
+        element: <AppShell nav={authorNav} area="Author Portal" />,
+        children: [
+          { path: '/books', element: <BooksPage /> },
+          { path: '/tickets', element: <TicketsPage /> },
+          { path: '/tickets/new', element: <NewTicketPage /> },
+          { path: '/tickets/:id', element: <TicketDetailPage /> },
+        ],
+      },
+    ],
+  },
+  {
+    element: <RequireRole role="ADMIN" />,
+    children: [
+      {
+        element: <AppShell nav={adminNav} area="Support Admin" />,
+        children: [
+          { path: '/admin', element: <AdminPlaceholder /> },
+          { path: '/admin/tickets/:id', element: <AdminPlaceholder /> },
+        ],
+      },
+    ],
+  },
+  { path: '*', element: <NotFound /> },
+]);

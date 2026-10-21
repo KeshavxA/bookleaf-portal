@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-brand-50: #eef6fb;
+  --color-brand-100: #d5e8f4;
+  --color-brand-500: #2a7ab0;
+  --color-brand-600: #1f6698;
+  --color-brand-700: #1b5577;
+  --color-brand-800: #16455f;
+}
+
+@keyframes flash-in {
+  from { background-color: rgb(254 249 195); }
+  to { background-color: transparent; }
+}
+
+.animate-flash { animation: flash-in 3s ease-out; }

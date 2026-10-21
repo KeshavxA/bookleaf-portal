@@ -1,0 +1,40 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { authorApi } from '@/api/endpoints';
+import { qk } from '@/api/queryKeys';
+import type { AuthorTicket, CreateTicketInput } from '@/api/types';
+import { useRealtime } from '@/hooks/useRealtime';
+
+export function useMyTickets() {
+  const { pollInterval } = useRealtime();
+  return useQuery({ queryKey: qk.tickets, queryFn: authorApi.tickets, refetchInterval: pollInterval });
+}
+
+export function useTicket(id: string) {
+  const { pollInterval } = useRealtime();
+  return useQuery({ queryKey: qk.ticket(id), queryFn: () => authorApi.ticket(id), refetchInterval: pollInterval });
+}
+
+export function useCreateTicket() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateTicketInput) => authorApi.createTicket(input),
+    onSuccess: (ticket) => {
+      qc.setQueryData(qk.ticket(ticket.id), ticket);
+      qc.invalidateQueries({ queryKey: qk.tickets, exact: true });
+    },
+  });
+}
+
+export function useAddFollowUp(ticketId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: string) => authorApi.addMessage(ticketId, body),
+    onSuccess: (message) => {
+      // Append immediately from the server response, then reconcile with a refetch.
+      qc.setQueryData<AuthorTicket>(qk.ticket(ticketId), (t) =>
+        t ? { ...t, messages: [...(t.messages ?? []), message] } : t,
+      );
+      qc.invalidateQueries({ queryKey: qk.tickets });
+    },
+  });
+}
