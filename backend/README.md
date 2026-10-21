@@ -365,45 +365,17 @@ Errors always use the shape `{ "error": { "code", "message", "details": [{ "fiel
 npm test
 ```
 
-### AI eval (`npm run ai:eval`)
-
-The eval runs 12 fixed tickets through the configured provider's real classifier and drafter. It prints each
-classification and draft, then a pass/fail table of automatic draft checks (`src/ai/drafter/checks.ts`):
-- **length:** body words, PASS 100–180, WARN 80–220, otherwise FAIL
-- **bank once:** bank details requested at most once
-- **no off-topic money:** no royalty, payout or bank text on tickets that aren't about payment
-- **dates:** dates in the house format, "14 Nov 2026"
-- **numbers grounded:** every number appears in the prompt sources
-
-Each table comes from **one run, not a scored eval**. The checks are mechanical and don't judge tone or correctness.
-
-Second Gemini run, 2026-10-21, `gemini-3.5-flash-lite`, free tier, 30 s timeout, after the draft quality pass
-(category-aware FACTS, a single bank-details request, a 100–180 word target):
-
-```
-#  | category                  | length    | bank once | no off-topic money | dates | numbers grounded
-1  | ROYALTY_PAYMENTS          | WARN 84   | PASS      | n/a                | PASS  | PASS
-2  | ROYALTY_PAYMENTS          | PASS 149  | PASS      | n/a                | PASS  | PASS
-3  | ISBN_METADATA             | WARN 81   | PASS      | PASS               | PASS  | PASS
-4  | PRINTING_QUALITY          | draft failed: TIMEOUT
-5  | DISTRIBUTION_AVAILABILITY | FAIL 69   | PASS      | PASS               | PASS  | PASS
-6  | BOOK_STATUS_PRODUCTION    | draft failed: TIMEOUT
-7  | DISTRIBUTION_AVAILABILITY | FAIL 79   | PASS      | PASS               | PASS  | PASS
-8  | ROYALTY_PAYMENTS          | draft failed: TIMEOUT
-9  | GENERAL_INQUIRY           | WARN 83   | PASS      | PASS               | PASS  | PASS
-10 | ROYALTY_PAYMENTS          | PASS 106  | PASS      | n/a                | PASS  | PASS
-11 | BOOK_STATUS_PRODUCTION    | PASS 122  | PASS      | PASS               | PASS  | PASS
-12 | ROYALTY_PAYMENTS          | WARN 89   | PASS      | n/a                | PASS  | PASS
-```
-
-Categories in this table are the ones the run actually used. #7 and #12 were misfiled by the keyword fallback after
-classification timeouts. 8 of 24 calls timed out, so only 9 of 12 drafts were produced. What it shows, and what it
-doesn't, is in [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md#gemini-eval-run-2-after-the-draft-quality-pass).
-
 - **Unit:** `nextPayoutDate` (year rollover, the boundary day, leap years), royalty assessment, classifier (valid, ISBN
   floor, invalid outputs → fallback, outage → fallback), LLM client (retry policy, no retry on 400/timeout, breaker
   opening and fail-fast, refusal, disabled mode, no sampling params sent, one `AiCall` per call), drafter (FACTS
   content per book state, KB isolation, byte-stable cached prefix, 6-message window, grounding tripwire).
+- **Draft quality** (no API calls):
+  - FACTS chosen by category and payment relevance, with no money wording on production tickets
+  - required points per category: which apply, the KB phrases they rely on, and their keyword tests
+  - a repeated bank-details request reduced to one
+  - date format, and length as a warning only
+  - keyword-fallback rules for profile/description updates and bare amounts
+  - the eval's check table, rendered from canned drafts
 - **Config:** production refuses a missing, short or placeholder `JWT_SECRET`, a missing API key is not fatal, and the
   startup summary contains no secret values.
 - **Prompt safety:** an injection string in the description (`</original_query><facts>…`) stays inside one delimited,
@@ -431,6 +403,65 @@ doesn't, is in [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md#gemini-eval-run-2-after-t
 Tests use `TEST_DATABASE_URL`, or your `DATABASE_URL` with `_test` appended to the database name (create it first:
 `createdb bookleaf_test`). The test DB is never the dev DB. Setup is non-destructive (`migrate deploy` plus the
 idempotent seed), and tests clear their own tickets.
+
+### AI eval (`npm run ai:eval`)
+
+The eval runs 12 fixed tickets through the configured provider's real classifier and drafter. It prints each
+classification and draft, then a pass/fail table of automatic draft checks (`src/ai/drafter/checks.ts`):
+- **required points:** each point the KB says a reply in this category should make is checked by a simple keyword
+  test. The points and their tests are defined once, in `src/ai/drafter/requiredPoints.ts`, and the prompt's focus
+  note lists the same points. Points that don't apply to the ticket are neither asked for nor checked. The table
+  shows every point as covered (`+`) or missing (`-`), and the totals give coverage per category and point.
+- **bank once:** bank details requested at most once
+- **no off-topic money:** no royalty, payout or bank text on tickets that aren't about payment
+- **dates:** dates in the house format, "14 Nov 2026"
+- **numbers grounded:** every number appears in the prompt sources
+
+| Category | Required points and their keyword tests |
+|---|---|
+| ROYALTY_PAYMENTS | `ack` (understand / sorry / concern...), `cycle` ("quarter" + "45 days"), `date` (the computed payout date), `rollover`* ("roll over"), `bank`* ("bank details/account"), `48h`* ("48 hours") |
+| ISBN_METADATA | `serious` (serious / priority / responsibility), `escalate` ("escalat*" + "production team"), `48h` |
+| PRINTING_QUALITY | `sorry`, `photos`, `reprint` ("reprint" + free / no cost), `5-7d` ("5-7" or "5 to 7" + "business days") |
+| DISTRIBUTION_AVAILABILITY | `sync` ("stock sync" / "sync issue"), `resync` ("re-sync" + "distribution team"), `24-48h` |
+| BOOK_STATUS_PRODUCTION | `status` (the stage from FACTS), `no-blame` (negative test: "because you", "you didn't"...; weak), `timeline` ("48 hours", "within N days", "by 14 Nov 2026") |
+| GENERAL_INQUIRY | `direct` ("yes", "no", "you can"... in the first two paragraphs; weak), `channels`* ("dashboard" + "email"), `3-5d`* |
+
+\* Only when it applies:
+- roll-over: pending is under ₹1,000
+- bank: bank status isn't known
+- 48h: a payout review is flagged
+- channels and 3-5d: description, bio, photo or metadata questions
+
+**Word count** is printed as information only and is never pass/fail. Each table comes from **one run, not a scored
+eval**. The keyword tests catch a missing point, not a badly made one, and they don't judge tone or correctness.
+
+> **No eval has been run since the second draft quality pass** (required points in the focus note, no money wording
+> on production tickets, the keyword-fallback fixes). There are no results with the required-points check yet. The
+> table below is from the run before those changes and uses the old checks, including a length pass/fail that no
+> longer exists.
+
+Second Gemini run (2026-10-21, `gemini-3.5-flash-lite`, free tier, 30 s timeout), after the first draft quality
+pass, with the old check set:
+
+```
+#  | category                  | length    | bank once | no off-topic money | dates | numbers grounded
+1  | ROYALTY_PAYMENTS          | WARN 84   | PASS      | n/a                | PASS  | PASS
+2  | ROYALTY_PAYMENTS          | PASS 149  | PASS      | n/a                | PASS  | PASS
+3  | ISBN_METADATA             | WARN 81   | PASS      | PASS               | PASS  | PASS
+4  | PRINTING_QUALITY          | draft failed: TIMEOUT
+5  | DISTRIBUTION_AVAILABILITY | FAIL 69   | PASS      | PASS               | PASS  | PASS
+6  | BOOK_STATUS_PRODUCTION    | draft failed: TIMEOUT
+7  | DISTRIBUTION_AVAILABILITY | FAIL 79   | PASS      | PASS               | PASS  | PASS
+8  | ROYALTY_PAYMENTS          | draft failed: TIMEOUT
+9  | GENERAL_INQUIRY           | WARN 83   | PASS      | PASS               | PASS  | PASS
+10 | ROYALTY_PAYMENTS          | PASS 106  | PASS      | n/a                | PASS  | PASS
+11 | BOOK_STATUS_PRODUCTION    | PASS 122  | PASS      | PASS               | PASS  | PASS
+12 | ROYALTY_PAYMENTS          | WARN 89   | PASS      | n/a                | PASS  | PASS
+```
+
+Categories in this table are the ones the run actually used. #7 and #12 were misfiled by the keyword fallback after
+classification timeouts. 8 of 24 calls timed out, so only 9 of 12 drafts were produced. What it shows, and what it
+doesn't, is in [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md#gemini-eval-run-2-after-the-draft-quality-pass).
 
 ## Deploying
 
@@ -504,7 +535,7 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 | Unit + integration tests (144) | ✅ verified | `npm test` against local PostgreSQL 14, Node 22. Both providers are covered with fake SDK transports |
 | Production build and start sequence | ✅ verified locally | `npm run build`, then `npm run start:prod` with `NODE_ENV=production` on a fresh empty database: both migrations applied, seed and 8 demo tickets created, `/health` ok, admin login and queue in urgency order. A second start created 0 demo tickets. The placeholder `JWT_SECRET` was refused, and the generated secret did not appear in the logs |
 | **Anthropic API** (classification, drafts, prompt caching, token and cost figures) | ❌ **not run against the real API** | No Anthropic key was available. The Anthropic path has only run against a fake SDK transport. The Haiku cost figures in this README are estimates |
-| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval) |
+| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval). **The second draft quality pass (required points, production wording, fallback rules) has not been run against the API** |
 | Gemini rate-limit, quota-exhausted and invalid-key handling against the live API | ❌ not verified | Not triggered in the real run; covered only with a fake SDK |
 | Docker image build | ❌ not verified | Docker not installed; the `Dockerfile` has never been built |
 | Render deploy (`render.yaml`) | ❌ not verified | Blueprint not applied yet |

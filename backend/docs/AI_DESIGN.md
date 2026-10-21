@@ -7,10 +7,11 @@ default), or a Gemini model set in `LLM_MODEL`. Nothing the model produces reach
 choosing to send it.
 
 > **Status (2026-10-21):** the **Anthropic path has not been run against the real API**; it has only been tested
-> with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had one manual
+> with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had two manual
 > `npm run ai:eval` runs** on `gemini-3.5-flash-lite` (free tier). Run 1: category 12/12, priority 11/12, 1 of 24
-> calls timed out. Run 2, after the draft quality pass: 8 of 24 calls timed out at 30 s, so only 9 drafts came back.
-> Each is a single unscored run, not an eval. Findings are under "Gemini eval run 1" and "run 2" below.
+> calls timed out. Run 2, after the first draft quality pass: 8 of 24 calls timed out at 30 s, so only 9 drafts came
+> back. Each is a single unscored run, not an eval. **The second draft quality pass (required points, production
+> wording, fallback rules) has not been run against any model yet**; see "Draft quality pass 2" below.
 
 ## Prompt strategy
 
@@ -32,13 +33,18 @@ then applies one hard rule: ISBN tickets are never below HIGH. Haiku 5.5 rejects
    - ISBN: the ISBN on record
    - printing: the print partner
    - distribution: the platforms
-   - production: the stage, e.g. "Cover Design"
+   - production: the status and stage, e.g. "Cover Design". There's no "no sales or royalties yet" line: that
+     wording made the model bring up money on production tickets in run 1. A "none yet" money line appears only if
+     the author asked about money.
 
    Royalty figures, the next payout date (quarter end + 45 days, on or after today), the ₹1,000 roll-over, the
    payout-review flag and bank status go in only when the ticket is about payment. That means the
    `ROYALTY_PAYMENTS` category, or the author's own text mentions royalties, payouts, payment or bank. An amount on its
    own, like an injected "₹50,000 bonus", doesn't count.
-4. `<focus>`: one or two lines computed in code. They say whether this is a payment ticket, and what to refer to.
+4. `<focus>`, computed in code. It says whether this is a payment ticket and, under "Cover these points", lists the
+   points the KB says this category's reply should make. Only the points that apply are listed (for example, the
+   roll-over only when pending is under ₹1,000). The points are defined once in `src/ai/drafter/requiredPoints.ts`,
+   and the eval checks the same list.
 5. `<original_query>` and the last 6 messages in `<thread>`.
 
 The model doesn't do any arithmetic or date logic. If a fact isn't in the prompt, the instructions say to promise a
@@ -87,13 +93,20 @@ in the eval output will show whether that happened.
 | 429 / 5xx / connection reset | 2 retries with backoff, then the fallback. A server-requested delay (Anthropic `retry-after`, capped at 4 s; Gemini `RetryInfo`) is honoured only if it fits in the 15 s wait budget |
 | 429 asking to wait longer than the budget, or quota exhausted (Gemini per-day limit, `limit: 0`) | No retry. The breaker opens immediately, so every call fails fast and the app stays in degraded mode (keyword triage, `draft: null`) until the cooldown ends |
 | Invalid key | `AUTH_ERROR`, not retried, and the message names the env var. Counts toward opening the breaker |
-| Timeout (15 s per attempt) | No retry; fallback |
+| Timeout (per attempt: 15 s Anthropic, 30 s Gemini; `LLM_TIMEOUT_MS` overrides) | No retry; fallback |
 | 5 consecutive upstream failures | Circuit breaker opens for 30 s, so calls fail instantly and then a single probe is allowed |
 | Invalid JSON or bad enum, refusal, truncated draft | Recorded as `INVALID_OUTPUT`/`REFUSED`, then the fallback. Doesn't count against the breaker |
 | Restart mid-job | `PENDING` tickets are re-queued on boot |
 
 Keyword fallback: weighted regexes choose the category, priority is MEDIUM (plus the ISBN floor), and the ticket gets
-`aiStatus: FAILED`, which the UI shows as "needs manual triage". An admin can retry with `POST /admin/tickets/:id/classify`
+`aiStatus: FAILED`, which the UI shows as "needs manual triage". Two rules came from run 2's misfiles:
+- "update/change/edit/new" + description/bio/photo/profile goes to GENERAL_INQUIRY. Its weight beats a stray platform
+  name like "Amazon".
+- An amount ("₹", "Rs.", "INR") only adds weight when a payment word already matched. A promised "₹50,000 bonus" alone
+  no longer makes a ticket ROYALTY_PAYMENTS.
+
+The fallback category also decides the draft's KB section and focus note, so a misfiled ticket gets an off-topic
+draft until an admin corrects the category. An admin can retry with `POST /admin/tickets/:id/classify`
 (a no-op if a job is already pending). Ticket creation never waits for the AI, and admin overrides are never
 overwritten by a later classification.
 
@@ -199,14 +212,40 @@ What improved, in this run:
 What did not improve:
 - **Length got worse.** Only 3 of 9 drafts are in the 100–180 target, and two are under 80 (69 and 79 words). With
   less material in FACTS, the model writes less, and the prompt's "about 100 to 180 words" isn't enough on its own to
-  hold it. A fix would be a one-line "short answer is fine, but cover: …" checklist per category in the focus note, or
-  a regenerate when the draft is under 80 words.
+  hold it. Pass 2 responds with a per-category "cover these points" list rather than a word count.
 - Reliability, which this pass didn't target, was much worse because of the timeouts.
 - #10 got HIGH from the model where MEDIUM was expected: classification variance, with no classifier change.
 
 Untested in this run: #4 (printing), #6 (typesetting) and #8 (the legal threat) produced no draft, so the new facts for
 those categories weren't exercised against the model. Two runs, one of them half-degraded, say very little about
 quality. A scored eval over many runs is still the missing piece.
+
+### Draft quality pass 2 (not yet evaluated)
+
+Changes since run 2. These are code and prompt changes only; **no model has been run on them**:
+- **Required points per category in the focus note,** taken from each KB section's "How to answer" guidance:
+  - royalty: acknowledge, the quarterly cycle and 45-day window, the computed date, the roll-over under ₹1,000,
+    one bank-details request, and a 48-hour timeline when a review is flagged
+  - ISBN: serious, escalated to the production team now, 48 hours
+  - printing: apologise, photos, a free reprint after verification, 5–7 business days
+  - distribution: stock sync, a re-sync with the distribution team, 24–48 hours
+  - production: the actual stage, no blame, a specific timeline
+  - general: answer directly; for metadata questions, the dashboard or email and 3–5 business days
+- **No money wording on production tickets** (FACTS and the system prompt).
+- **Keyword-fallback rules** for description/bio/photo updates and bare amounts.
+
+**How the eval checks it.** The eval replaces the length pass/fail with a "required points" check: each applicable
+point is tested by a simple documented keyword match, and the table shows each one as covered or missing. Word count
+is still printed, as information only. The keyword tests have limits:
+- They show that the words are there, not that the point is made well.
+- Two are weak by design. `no-blame` only catches phrases like "because you didn't", and `direct` only looks for
+  "yes", "no" or "you can" near the top.
+- Unit tests pin each test against a good and a bad sample draft, and check that every point's facts appear in its
+  KB section.
+
+What to look for in the next run: required-point coverage per category, whether drafts get longer as a side effect
+(the old length problem), and whether production drafts stay off money. The fallback fixes only show up if
+classifications time out again.
 
 ## Why Haiku
 
