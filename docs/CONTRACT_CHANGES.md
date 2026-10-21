@@ -45,3 +45,30 @@ The backend always returns `details: { field: string, message: string }[]`. `fie
 - `PATCH /admin/tickets/:id` with a category/priority equal to the current value is a no-op and doesn't set the
   `*Overridden` flag. Changing the category clears the cached draft, because the draft was grounded in the old category's KB.
 - List endpoints leave out the `messages` key entirely, rather than returning `[]`.
+
+---
+
+# Proposals from the frontend
+
+The frontend implements v1 as written and was smoke-tested against the backend. Nothing below blocks it.
+
+## F1. Endorse #1 (classify retry) and #6 (`FALLBACK` template draft)
+- **#6:** the draft panel already handles `draft` and `error` arriving together. It shows the template draft with a
+  "personalise before sending" note, so the backend can start returning it with no frontend change.
+- **#1:** once `POST /admin/tickets/:id/classify` is in the contract, the AI panel's "needs manual triage" banner gets
+  a "Retry AI" button. It isn't built yet, because it isn't in v1.
+
+## F2. `lastMessageAt` and `lastMessageFrom` on ticket list items (additive)
+**Why:** `GET /tickets` omits messages, so the author's list can't show "New reply from BookLeaf", and the admin queue
+can't show "author replied, awaiting us". `updatedAt` also changes on status and assignee edits, so it's too noisy for this.
+**Shape:** `lastMessageAt: string|null, lastMessageFrom: "AUTHOR"|"ADMIN"|null` on `AuthorTicket` and `AdminTicket`
+list items.
+
+## F3. Document #8 in the contract (clarification)
+The frontend relies on two of these behaviours: the reply form's default status option reads "moves to In Progress"
+for `OPEN` tickets, and the draft panel prompts a regenerate after a category change. Putting them in the contract
+would let both sides test against the same rules.
+
+## F4. `updatedAt` in SSE payloads (additive, optional)
+`data: { ticketId, updatedAt }` would let clients skip a refetch when their cached copy is already that fresh. This
+matters when several events for one ticket arrive together (`ticket.message` then `ticket.updated` on every reply).
