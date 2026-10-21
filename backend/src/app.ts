@@ -9,6 +9,9 @@ import type { Container } from "./container";
 import { buildApiRouter } from "./routes";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { openApiSpec } from "./docs/openapi";
+import { mountRouter } from "./lib/routeTable";
+
+export const API_PREFIX = "/api/v1";
 
 export function createApp(container: Container): Express {
   const app = express();
@@ -45,7 +48,7 @@ export function createApp(container: Container): Express {
   app.get("/api/docs/openapi.json", (_req, res) => res.json(openApiSpec));
   app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiSpec, { customSiteTitle: "BookLeaf API" }));
 
-  app.use("/api/v1", buildApiRouter(container.controllers));
+  mountRouter(app, API_PREFIX, buildApiRouter(container.controllers));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

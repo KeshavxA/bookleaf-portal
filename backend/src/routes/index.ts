@@ -3,6 +3,7 @@ import type { Controllers } from "../container";
 import { authenticate, requireRole } from "../middleware/auth";
 import { validate } from "../middleware/validate";
 import { aiRateLimit, loginRateLimit } from "../middleware/rateLimit";
+import { mountRouter } from "../lib/routeTable";
 import { LoginSchema } from "../schemas/authSchemas";
 import { CreateTicketSchema, MessageBodySchema } from "../schemas/ticketSchemas";
 import {
@@ -45,7 +46,7 @@ export function buildApiRouter(c: Controllers): Router {
   admin.post("/tickets/:id/reply", validate("body", ReplySchema), c.admin.reply);
   admin.post("/tickets/:id/classify", aiRateLimit, c.admin.reclassify);
   admin.get("/admins", c.admin.listAdmins);
-  api.use("/admin", admin);
+  mountRouter(api, "/admin", admin);
 
   return api;
 }
