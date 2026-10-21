@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router';
 import { useAuth } from '@/features/auth/AuthContext';
-import { config } from '@/lib/config';
+import { USE_MOCKS } from '@/lib/config';
 import { cn } from '@/lib/cn';
 import { Button } from './Button';
 import { LiveIndicator } from './LiveIndicator';
@@ -42,7 +42,7 @@ export function AppShell({ nav, area }: { nav: NavItem[]; area: string }) {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-4">
-            {config.useMocks && <MockBadge />}
+            {USE_MOCKS && <MockBadge />}
             <LiveIndicator />
             <span className="hidden text-sm text-slate-700 sm:inline">{user?.name}</span>
             <Button variant="secondary" size="sm" onClick={() => logout()}>

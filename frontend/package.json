@@ -9,12 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "test:watch": "vitest"
-  },
-  "msw": {
-    "workerDirectory": [
-      "public"
-    ]
+    "test:watch": "vitest",
+    "build:verify": "npm run build && node scripts/verify-prod-build.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.2",

@@ -7,7 +7,7 @@ import { Button } from '@/components/Button';
 import { Field, Input } from '@/components/Field';
 import { Banner } from '@/components/States';
 import { FullPageSpinner } from '@/components/Spinner';
-import { config } from '@/lib/config';
+import { USE_MOCKS } from '@/lib/config';
 import { applyServerErrors } from '@/lib/serverErrors';
 import { homeFor, useAuth } from './AuthContext';
 
@@ -22,7 +22,8 @@ const DEMO_ACCOUNTS = [
   { label: 'Author: Kavita Deshmukh (book in production)', email: 'kavita.deshmukh@email.com' },
   { label: 'Admin 1', email: 'admin1@bookleaf.com' },
 ];
-const showDemoAccounts = config.useMocks || import.meta.env.DEV;
+// Never in production builds: the demo password must not ship.
+const showDemoAccounts = USE_MOCKS || import.meta.env.DEV;
 
 export function LoginPage() {
   const { user, initializing, login, logoutReason } = useAuth();
