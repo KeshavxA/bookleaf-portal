@@ -70,6 +70,8 @@ export type ResponseParser<T> = (response: LlmResponse) => T;
 /** The only surface the classifier/drafter depend on - trivially mockable in tests. */
 export interface LlmPort {
   readonly model: string;
+  /** False when no API key is configured (every call fails fast with DISABLED). */
+  readonly enabled?: boolean;
   complete<T>(request: LlmRequest, parse: ResponseParser<T>): Promise<{ value: T; response: LlmResponse }>;
 }
 
