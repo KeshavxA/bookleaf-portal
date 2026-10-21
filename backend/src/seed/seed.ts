@@ -3,8 +3,7 @@
  * - one User (role AUTHOR, password Passw0rd!) + Author per dataset author
  * - every book, with nulls preserved for in-production books
  * - two admins
- * - optional demo tickets (from the KB sample queries) on an empty ticket table;
- *   they are created aiStatus=PENDING so the server classifies them on boot
+ * - demo tickets when SEED_DEMO_TICKETS=true (see demoTickets.ts; idempotent, no LLM calls)
  *
  * Safe to run on every deploy (used by `npm run start:prod`).
  */
@@ -13,7 +12,7 @@ import { join } from "node:path";
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { classifyByKeywords } from "../ai/classifier/keywordFallback";
+import { seedDemoTickets } from "./demoTickets";
 
 const DEFAULT_PASSWORD = "Passw0rd!";
 
@@ -57,48 +56,6 @@ const DatasetJson = z.object({
 const ADMINS = [
   { email: "admin1@bookleaf.com", name: "Ritika Sen" },
   { email: "admin2@bookleaf.com", name: "Karan Verma" },
-];
-
-/** Demo tickets built from the KB's sample queries, attached to real dataset records. */
-const DEMO_TICKETS: Array<{ email: string; bookId: string | null; subject: string; description: string; daysAgo: number }> = [
-  {
-    email: "ananya.reddy@email.com",
-    bookId: "BK005",
-    subject: "No royalty received yet",
-    description:
-      "I published my book over a year ago and still haven't received any royalty. My dashboard shows a pending amount but nothing has come to my account. What's going on?",
-    daysAgo: 3,
-  },
-  {
-    email: "rohit.kapoor@email.com",
-    bookId: "BK003",
-    subject: "ISBN on Amazon doesn't match my printed copy",
-    description:
-      "My book is showing a different ISBN on Amazon than what's printed on the physical copy. Readers are getting confused and I'm worried about sales being tracked wrongly.",
-    daysAgo: 2,
-  },
-  {
-    email: "priya.sharma@email.com",
-    bookId: "BK001",
-    subject: "Author copies have blurry images",
-    description:
-      "I received my author copies and the print quality is terrible. The images are blurry and several pages are misaligned. I can't give these to anyone.",
-    daysAgo: 1,
-  },
-  {
-    email: "kavita.deshmukh@email.com",
-    bookId: "BK015",
-    subject: "Still in typesetting after 3 weeks",
-    description: "It's been 3 weeks and my book Raising Roots is still in typesetting. When will it be done?",
-    daysAgo: 1,
-  },
-  {
-    email: "meera.nair@email.com",
-    bookId: "BK008",
-    subject: "Can I update my book description?",
-    description: "Can I update the description of my book on Amazon after it's already live? I'd like to add a couple of review quotes.",
-    daysAgo: 0,
-  },
 ];
 
 async function main() {
@@ -160,29 +117,8 @@ async function main() {
       });
     }
 
-    let demo = 0;
-    const seedDemo = (process.env.SEED_DEMO_TICKETS ?? "true") !== "false";
-    if (seedDemo && (await prisma.ticket.count()) === 0) {
-      for (const t of DEMO_TICKETS) {
-        const user = await prisma.user.findUnique({ where: { email: t.email }, include: { author: true } });
-        if (!user?.author) continue;
-        const createdAt = new Date(Date.now() - t.daysAgo * 86_400_000);
-        const provisional = classifyByKeywords(t);
-        await prisma.ticket.create({
-          data: {
-            authorId: user.author.id,
-            bookId: t.bookId,
-            subject: t.subject,
-            description: t.description,
-            category: provisional.category,
-            priority: provisional.priority,
-            aiStatus: "PENDING",
-            createdAt,
-          },
-        });
-        demo++;
-      }
-    }
+    // Opt-in: deploys set SEED_DEMO_TICKETS=true; locally use `npm run seed:demo`.
+    const demo = ["true", "1"].includes(process.env.SEED_DEMO_TICKETS ?? "") ? (await seedDemoTickets(prisma)).created : 0;
 
     console.log(
       `Seed complete: ${data.authors.length} authors, ${books} books, ${ADMINS.length} admins, ${demo} demo tickets (password: ${DEFAULT_PASSWORD})`,

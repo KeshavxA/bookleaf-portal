@@ -15,6 +15,8 @@
     "typecheck": "tsc --noEmit",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx src/seed/seed.ts",
+    "seed:demo": "tsx src/seed/demoTickets.ts",
+    "db:clear-tickets": "tsx src/seed/clearTickets.ts",
     "db:reset": "prisma migrate reset --force",
     "ai:eval": "tsx scripts/ai-eval.ts",
     "test": "vitest run",
