@@ -6,6 +6,7 @@ AI triage and reply drafting on Anthropic's Claude Haiku.
 - **API contract (source of truth):** [`../docs/API_CONTRACT.md`](../docs/API_CONTRACT.md). Proposed changes are in [`../docs/CONTRACT_CHANGES.md`](../docs/CONTRACT_CHANGES.md).
 - **Interactive docs:** `GET /api/docs` (Swagger UI); raw spec at `GET /api/docs/openapi.json`
 - **Health:** `GET /health` returns `{ status, db, ai }`
+- **AI design write-up:** [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md) (one page: prompts, cost, failure modes, production changes)
 
 ## Quick start
 
@@ -13,10 +14,11 @@ Prerequisites: Node 20+, PostgreSQL 14+.
 
 ```bash
 cd backend
-cp .env.example .env            # then set DATABASE_URL, JWT_SECRET and (optionally) ANTHROPIC_API_KEY
+cp .env.example .env            # then set DATABASE_URL and (optionally) ANTHROPIC_API_KEY
 npm install
 npx prisma migrate deploy       # create the schema
-npm run db:seed                 # 10 authors, 18 books, 2 admins, 5 demo tickets (idempotent)
+npm run db:seed                 # 10 authors, 18 books, 2 admins (idempotent)
+npm run seed:demo               # optional: 8 pre-classified demo tickets (idempotent, no AI calls)
 npm run dev                     # http://localhost:4000
 ```
 
@@ -41,8 +43,10 @@ the brief asks for, and it's the same path that runs when the AI provider is dow
 |---|---|
 | `npm run dev` | Watch mode via tsx |
 | `npm run build` / `npm start` | Compile to `dist/` (KB markdown files copied alongside) / run it |
-| `npm run start:prod` | `prisma migrate deploy` → seed → server (what the container runs) |
-| `npm run db:seed` | Idempotent seed; re-running never resets changed passwords |
+| `npm run start:prod` | `prisma migrate deploy` → seed → server (the deploy start command) |
+| `npm run db:seed` | Idempotent seed; re-running never resets changed passwords. Also adds demo tickets when `SEED_DEMO_TICKETS=true` |
+| `npm run seed:demo` | 8 demo tickets with preset category/priority and `aiStatus: DONE`, built from real dataset rows. Idempotent (skips a ticket if that author already has one with the same subject). Makes no LLM calls |
+| `npm run db:clear-tickets` | Deletes tickets, messages, internal notes and `AiCall` rows only (users, authors, books stay). Refuses when `NODE_ENV=production` unless run with `-- --force` |
 | `npm test` | Unit + integration tests (see [Testing](#testing)) |
 | `npm run ai:eval` | Runs 12 sample tickets through the real classifier + drafter and prints the results for review (`-- --no-draft`, `-- --only=3`) |
 | `npm run typecheck` | `tsc --noEmit` |
@@ -51,22 +55,27 @@ the brief asks for, and it's the same path that runs when the AI provider is dow
 
 Only `.env.example` is committed. `.env` is git-ignored and docker-ignored.
 
+All variables are validated with zod at boot (`src/config/env.ts`). Invalid config prints the variable names and
+reasons (never values) and exits with status 1. At startup the server logs a config summary built from an allowlist:
+secrets show only as `set`/`not set`, and the database URL is reduced to host and database name. A unit test checks
+that the summary contains no key, secret or password values.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
-| `JWT_SECRET` | (required, ≥32 chars) | HS256 signing key |
+| `JWT_SECRET` | dev placeholder outside production | HS256 signing key, ≥32 chars. **In production the server refuses to start** if it is missing, shorter than 32 characters, or equal to the `.env.example` placeholder |
 | `JWT_EXPIRES_IN` | `8h` | Token lifetime |
 | `PORT` | `4000` | |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed browser origins |
 | `LOG_LEVEL` | `info` | pino level |
-| `ANTHROPIC_API_KEY` | (empty) | Server-side only. Never logged, returned, or sent to the frontend. Empty means AI disabled |
+| `ANTHROPIC_API_KEY` | (empty) | Server-side only. Never logged, returned, or sent to the frontend. Empty does **not** stop startup: the server logs one warning and runs in degraded mode |
 | `LLM_MODEL` | `claude-haiku-5-5` | Model for classification and drafting |
 | `LLM_TIMEOUT_MS` | `15000` | Per-attempt timeout |
 | `LLM_MAX_RETRIES` | `2` | Retries on 429 / 5xx / connection reset |
 | `LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN_MS` | `5` / `30000` | Circuit breaker |
 | `RATE_LIMIT_LOGIN_MAX` / `_WINDOW_MS` | `10` / 15 min | Per IP+email |
 | `RATE_LIMIT_AI_MAX` / `_WINDOW_MS` | `20` / 1 min | Per admin, on `/draft` and `/classify` |
-| `SEED_DEMO_TICKETS` | `true` | Seed demo tickets on an empty ticket table |
+| `SEED_DEMO_TICKETS` | `false` | `true` makes the deploy-time seed also run `seed:demo` (idempotent) |
 
 ---
 
@@ -163,7 +172,8 @@ Admin opens ticket ──► POST /draft ──► cached? return it
   validated with zod; over-long reasoning is trimmed to 20 words, while a bad enum or invalid JSON triggers the fallback.
 - **Inputs are minimal:** subject, description (truncated to 2,000 characters), and the linked book's title and status.
   Author text is wrapped in tags with `<`/`>` neutralised, and the prompt says to ignore instructions inside ticket text
-  (prompt-injection case #12 in the eval).
+  (prompt-injection case #12 in the eval). The database keeps the raw text; only the prompt copy is escaped
+  (`src/ai/promptText.ts`, shared with the drafter).
 - **Priority rubric in the prompt.** CRITICAL: long-overdue or missing money, repeated escalation, legal threats.
   HIGH: ISBN errors, wrong royalty, unavailable book. MEDIUM: print quality, production delays. LOW: informational.
   The prompt also says to judge urgency by the situation, not the tone.
@@ -184,7 +194,7 @@ The prompt is assembled from four parts. The whole KB and the whole dataset are 
 | `system[0]` | Static instructions: BookLeaf voice (from the KB tone guidelines), grounding rules, format rules | `cache_control`, shared by every draft |
 | `system[1]` | **Only the KB section for the ticket's category** (`src/ai/kb/*.md`, extracted from the brief), including its sample query and "how to answer" guidance as a few-shot, plus an illustrative reply that uses `[placeholders]` so no example numbers can leak | `cache_control`, shared per category |
 | user: `<facts>` | **FACTS computed in code from the DB:** author first name, bank status, ticket age; book title, ISBN, status, print partner, platforms, copies sold, royalty earned/paid/pending, last payout date, whether pending is under the ₹1,000 threshold (rolls over), **next payout date**, and a payout-review flag | not cached (per ticket) |
-| user: thread | Original query plus the **last 6 messages** (each capped at 1,500 characters) | not cached |
+| user: `<original_query>`, `<thread>` | Subject and description, plus the **last 6 messages** (each capped at 1,500 characters). All author and staff text is escaped so it can't close these blocks or forge a `<facts>` block. Internal notes are never sent | not cached |
 
 Rules in the prompt:
 
@@ -212,8 +222,8 @@ are rejected, and a *grounding tripwire* logs any number in the draft that doesn
 KB, thread). Admins review every draft before it's sent, so the tripwire alerts rather than blocks.
 
 **Caching:** the draft is stored on the ticket and returned until `regenerate: true` is sent, a new author message
-arrives, or an admin changes the category (the draft was grounded in the old category's KB). Concurrent requests for
-the same ticket share one LLM call.
+arrives, an admin replies (the draft was used or replaced), or an admin changes the category (the draft was grounded in
+the old category's KB). Concurrent requests for the same ticket share one LLM call.
 
 ### 4. Cost
 
@@ -289,7 +299,7 @@ All endpoints are under `/api/v1`. Full request/response schemas are in Swagger 
 | POST | `/admin/tickets/:id/notes` | admin |
 | POST | `/admin/tickets/:id/draft` | admin (AI rate limit) |
 | POST | `/admin/tickets/:id/reply` | admin |
-| POST | `/admin/tickets/:id/classify` | admin, *proposed addition* (AI retry) |
+| POST | `/admin/tickets/:id/classify` | admin (AI rate limit). Retries classification. If the ticket is already `PENDING`: 202 with no second job |
 | GET | `/admin/admins` | admin |
 | GET | `/events` | any (SSE) |
 
@@ -305,31 +315,116 @@ npm test
   floor, invalid outputs → fallback, outage → fallback), LLM client (retry policy, no retry on 400/timeout, breaker
   opening and fail-fast, refusal, disabled mode, no sampling params sent, one `AiCall` per call), drafter (FACTS
   content per book state, KB isolation, byte-stable cached prefix, 6-message window, grounding tripwire).
-- **Integration** (supertest against a real Postgres): login and token rejection, every route except login
-  requires auth, **an author can't read another author's ticket (404)**, cross-author book attachment, role
-  separation, author DTOs never contain AI/notes fields, **field-level validation errors**, malformed JSON,
+- **Config:** production refuses a missing, short or placeholder `JWT_SECRET`, a missing API key is not fatal, and the
+  startup summary contains no secret values.
+- **Prompt safety:** an injection string in the description (`</original_query><facts>…`) stays inside one delimited,
+  escaped block in the draft prompt, and the forged amount never reaches the real FACTS block.
+- **Security, driven by the real route table** (`tests/integration/security.test.ts`). `listRoutes()` walks the Express
+  stack, so a newly added route is covered automatically:
+  - every route except login, `/health` and the OpenAPI JSON returns 401 without a token
+  - every `/admin/*` route returns 403 for an author
+  - every author `:id` route returns 404 for another author's ticket
+  - the serialized AuthorTicket JSON (nested objects included) never contains `category`, `priority`, `aiStatus`,
+    `aiSuggestion`, `assignee`, `internalNotes` or `draft`
+  - a cross-author `bookId` returns 4xx
+  - author SSE streams carry only their own ticket ids and never `ticket.created`/`ai_ready`
+  - every route is in the OpenAPI spec and every spec path is a route
+
+  I checked that these fail on purpose by injecting an unprotected route, an `/admin` route without a role check, a
+  nested `priority` leak and an undocumented route.
+- **Integration** (supertest against a real Postgres): login and token rejection, **field-level validation errors**,
+  malformed JSON, page/pageSize rejected rather than clamped, the 5,000-character cap on messages/replies/notes,
   **ticket creation with the LLM failing** (201 → `FAILED` + keyword triage + one `AiCall` with `attempts: 3`), draft
-  returns `draft:null` when AI is down, override flags surviving reclassification, draft caching and invalidation,
-  queue filters, 409 on closed tickets, and **SSE role scoping and disconnect cleanup**.
+  returns `draft:null` when AI is down, override flags surviving reclassification, `/classify` on a `PENDING` ticket
+  starting no second job, draft caching and invalidation, queue filters, `assigneeId: null` unassigning, 409 on closed
+  tickets, the demo seed (idempotent, no `AiCall` rows) and `db:clear-tickets`.
 
 Tests use `TEST_DATABASE_URL`, or your `DATABASE_URL` with `_test` appended to the database name (create it first:
 `createdb bookleaf_test`). The test DB is never the dev DB. Setup is non-destructive (`migrate deploy` plus the
 idempotent seed), and tests clear their own tickets.
 
-## Deployment
+## Deploying
 
-- **Docker:** a multi-stage `Dockerfile` (node 22 slim, non-root, healthcheck). The container runs
-  `prisma migrate deploy && node dist/seed/seed.js && exec node dist/server.js`. The seed is idempotent, so every
-  deploy is safe.
-- **Railway:** `railway.json` (Dockerfile builder, `/health` healthcheck). Add a Postgres plugin and set
-  `DATABASE_URL`, `JWT_SECRET`, `ANTHROPIC_API_KEY` and `CORS_ORIGINS`.
-- **Render:** `render.yaml` blueprint (web service plus managed Postgres; set `ANTHROPIC_API_KEY` and `CORS_ORIGINS`
-  in the dashboard).
-- The server shuts down gracefully on SIGTERM: SSE streams close, in-flight classifications get up to 10 s, then the DB
-  disconnects. `trust proxy` is set so rate limiting sees real client IPs.
+Deploys build natively on the platform (no Docker):
+
+| Step | Command |
+|---|---|
+| Build | `npm ci --include=dev && npx prisma generate && npm run build` (dev deps are needed for `tsc`) |
+| Start | `npm run start:prod` = `prisma migrate deploy && node dist/seed/seed.js && exec node dist/server.js` |
+| Health check | `GET /health` → `200 {"status":"ok","db":"ok","ai":"enabled"\|"disabled"}`, or `503` if the DB is unreachable |
+
+The seed is idempotent, so running it on every deploy is safe. With `SEED_DEMO_TICKETS=true` it also creates the 8
+demo tickets once. They have preset triage, so the queue looks right even without an API key.
+
+### Production environment variables
+
+| Variable | Required | Value |
+|---|---|---|
+| `NODE_ENV` | yes | `production` (enables the JWT_SECRET checks) |
+| `DATABASE_URL` | yes | from the managed Postgres |
+| `JWT_SECRET` | yes | ≥32 random chars, e.g. `openssl rand -base64 48`. The server won't start without it |
+| `CORS_ORIGINS` | yes, for a browser frontend | the frontend origin(s), comma-separated, e.g. `https://bookleaf-portal.vercel.app` |
+| `SEED_DEMO_TICKETS` | no | `true` for a demo instance |
+| `ANTHROPIC_API_KEY` | no | without it, AI runs in degraded mode (keyword triage, manual replies) |
+| `PORT` | no | injected by Render and Railway; defaults to 4000 |
+| `LLM_MODEL`, `LLM_*`, `RATE_LIMIT_*`, `LOG_LEVEL`, `JWT_EXPIRES_IN` | no | defaults in the [table above](#environment-variables) |
+
+### Render (`render.yaml`)
+
+1. Push the repo to GitHub.
+2. In the Render dashboard: **New → Blueprint**, pick the repo, and set the Blueprint path to `backend/render.yaml`.
+3. Fill in the prompted values: `CORS_ORIGINS` (the frontend URL) and, optionally, `ANTHROPIC_API_KEY`.
+   `JWT_SECRET` is generated by Render. `NODE_ENV=production` and `SEED_DEMO_TICKETS=true` are preset.
+4. Apply. Render creates the `bookleaf-db` Postgres and the `bookleaf-api` web service (Node 22, `rootDir: backend`).
+5. Check `https://<service>.onrender.com/health`, then log in as `admin1@bookleaf.com` / `Passw0rd!`.
+
+Free-tier caveats (check Render's current terms): free web services sleep when idle, so the first request after a
+pause is slow, and free Postgres databases expire after a fixed period.
+
+### Railway (`railway.json`)
+
+1. **New Project → Deploy from GitHub repo**, and pick the repo.
+2. In the service's **Settings**, set Root Directory to `/backend` and the config-as-code path to `/backend/railway.json`.
+   That file sets the build command, the start command and the `/health` check.
+3. **New → Database → PostgreSQL** in the same project.
+4. In the service's **Variables**, set `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `NODE_ENV=production`,
+   `JWT_SECRET=<openssl rand -base64 48>`, `CORS_ORIGINS=<frontend URL>`, `SEED_DEMO_TICKETS=true`, and optionally
+   `ANTHROPIC_API_KEY`.
+5. Under **Settings → Networking**, generate a domain and check `/health`.
+
+### Resetting demo data on a live instance
+
+From the platform's shell, in `backend/`: `node dist/seed/clearTickets.js --force`, then `node dist/seed/demoTickets.js`.
+The production guard means `--force` is required.
+
+### Docker (unverified)
+
+A multi-stage `Dockerfile` is included (node 22 slim, non-root, healthcheck, same start sequence), but **it has never
+been built**, because Docker wasn't available while this was written. Treat it as a starting point. The Render and
+Railway configs above don't use it.
+
+The server shuts down gracefully on SIGTERM: SSE streams close, in-flight classifications get up to 10 s, then the DB
+disconnects. `trust proxy` is set so rate limiting sees real client IPs.
+
+### Verified vs not verified
+
+| What | Status | How |
+|---|---|---|
+| Unit + integration tests | ✅ verified | `npm test` against local PostgreSQL 14, Node 22 |
+| Production build and start sequence | ✅ verified locally | `npm run build`, then `npm run start:prod` with `NODE_ENV=production` on a fresh empty database: both migrations applied, seed and 8 demo tickets created, `/health` ok, admin login and queue in urgency order. A second start created 0 demo tickets. The placeholder `JWT_SECRET` was refused, and the generated secret did not appear in the logs |
+| Real Claude API (classification quality, draft quality, prompt caching, token and cost figures) | ❌ not verified | No API key was available. The AI code has only run against a fake SDK transport in tests. Run `npm run ai:eval` with a key to check it. The cost figures in this README are estimates |
+| Docker image build | ❌ not verified | Docker not installed; the `Dockerfile` has never been built |
+| Render deploy (`render.yaml`) | ❌ not verified | Blueprint not applied yet |
+| Railway deploy (`railway.json`) | ❌ not verified | Not deployed yet; the `RAILPACK` builder value and the config-path setting are from Railway's docs, not tested |
+| Deployed instance / live URL | ❌ none yet | |
+| SSE through a hosting proxy | ❌ not verified | Works locally; `X-Accel-Buffering: no` and a 25 s heartbeat are set for proxies, but untested on Render or Railway |
 
 ## Known limitations and next steps
 
+- **Dates are UTC.** Bare `from`/`to` filter dates mean UTC days (`to=2026-10-21` runs through `23:59:59.999Z`), so for
+  IST users a day filter is off by 5.5 hours at each edge. Clients can send full ISO timestamps with an offset
+  (URL-encode the `+` as `%2B`). Ticket ages and payout dates are also computed in UTC. Payout dates are calendar
+  days, so this only matters within a few hours of midnight.
 - **Single instance.** The event bus, classification queue, rate-limit store, breaker state and the in-flight draft
   map are all in-process. To scale out: Redis pub/sub for the bus, a durable queue (BullMQ or pg-boss) with retries and
   a dead-letter queue, and a Redis rate-limit store. The interfaces are already shaped for this.
