@@ -42,7 +42,7 @@ describe('author flow (mock API)', () => {
     expect(screen.getByText('cover-notes.pdf')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Submit query' }));
 
-    expect(await screen.findByRole('heading', { name: /Query submitted: BL-\d+/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Query submitted: #\d+/ })).toBeInTheDocument();
     await user.click(screen.getByRole('link', { name: 'View ticket' }));
 
     expect(await screen.findByRole('heading', { name: 'Cover proof timeline' })).toBeInTheDocument();

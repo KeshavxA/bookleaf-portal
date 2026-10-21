@@ -6,7 +6,7 @@ import { EmptyState, ErrorState } from '@/components/States';
 import { UpdatedCue } from '@/components/UpdatedCue';
 import { useChangeCue } from '@/hooks/useChangeCue';
 import { useNow } from '@/hooks/useNow';
-import { formatDate, formatRelative } from '@/lib/format';
+import { formatDate, formatRelative, formatTicketNumber } from '@/lib/format';
 import { useMyTickets } from './hooks';
 
 const newTicketLink = (
@@ -51,7 +51,7 @@ export function TicketsPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium text-slate-900">{t.subject}</p>
                   <p className="text-xs text-slate-500">
-                    {t.ticketNumber} · {t.book?.title ?? 'General / Account Level'} · Opened {formatDate(t.createdAt)}
+                    {formatTicketNumber(t.ticketNumber)} · {t.book?.title ?? 'General / Account Level'} · Opened {formatDate(t.createdAt)}
                   </p>
                 </div>
                 <span className="text-xs text-slate-500">Updated {formatRelative(t.updatedAt, now)}</span>

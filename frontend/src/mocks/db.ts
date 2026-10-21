@@ -22,7 +22,7 @@ export type MockUser = User;
 
 export interface MockTicket {
   id: string;
-  ticketNumber: string;
+  ticketNumber: number;
   authorId: string;
   bookId: string | null;
   subject: string;
@@ -44,21 +44,21 @@ export interface MockTicket {
 }
 
 export interface MockDb {
-  version: 1;
+  version: 2;
   users: MockUser[];
   books: Record<string, Book[]>;
   tickets: MockTicket[];
   seq: number;
 }
 
-const STORAGE_KEY = 'bookleaf.mockdb.v1';
+const STORAGE_KEY = 'bookleaf.mockdb.v2';
 
 function load(): MockDb {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as MockDb;
-      if (parsed.version === 1) return parsed;
+      if (parsed.version === 2) return parsed;
     }
   } catch {
     /* fall through to a fresh seed */

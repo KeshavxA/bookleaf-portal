@@ -47,7 +47,7 @@ describe('useEventStream', () => {
     const { result } = renderHook(() => useEventStream({ url: 'http://x/events', token: 'abc', onEvent: vi.fn() }));
     await act(() => captured!.onopen!(sseResponse()));
 
-    let delay: number | null | undefined;
+    let delay: number | null | undefined | void;
     act(() => {
       delay = captured!.onerror!(new TypeError('network down'));
     });

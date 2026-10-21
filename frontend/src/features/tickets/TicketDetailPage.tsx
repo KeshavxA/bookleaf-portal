@@ -11,7 +11,7 @@ import { Banner, EmptyState, ErrorState } from '@/components/States';
 import { UpdatedCue } from '@/components/UpdatedCue';
 import { useAuth } from '@/features/auth/AuthContext';
 import { useChangeCue } from '@/hooks/useChangeCue';
-import { formatDateTime } from '@/lib/format';
+import { formatDateTime, formatTicketNumber } from '@/lib/format';
 import { useAddFollowUp, useTicket } from './hooks';
 
 export function TicketDetailPage() {
@@ -49,7 +49,7 @@ function TicketView({ ticket, changedAt }: { ticket: AuthorTicket; changedAt: nu
     <>
       <header className="mb-6">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-slate-500">{ticket.ticketNumber}</span>
+          <span className="text-sm text-slate-500">{formatTicketNumber(ticket.ticketNumber)}</span>
           <StatusBadge status={ticket.status} />
           <UpdatedCue changedAt={changedAt} />
         </div>

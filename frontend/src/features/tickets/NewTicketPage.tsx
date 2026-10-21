@@ -9,6 +9,7 @@ import { Button } from '@/components/Button';
 import { Field, Input, Select, Textarea } from '@/components/Field';
 import { Banner } from '@/components/States';
 import { useBooks } from '@/features/books/useBooks';
+import { formatTicketNumber } from '@/lib/format';
 import { AttachmentPicker } from './AttachmentPicker';
 import { useCreateTicket } from './hooks';
 import { GENERAL_BOOK, ticketSchema, type TicketFormValues } from './schema';
@@ -109,7 +110,7 @@ function TicketForm({ initialBookId, onCreated }: { initialBookId: string; onCre
 function SubmittedState({ ticket, onAnother }: { ticket: AuthorTicket; onAnother: () => void }) {
   return (
     <div className="max-w-2xl rounded-lg border border-emerald-200 bg-emerald-50 p-6" role="status">
-      <h1 className="text-lg font-semibold text-emerald-900">Query submitted: {ticket.ticketNumber}</h1>
+      <h1 className="text-lg font-semibold text-emerald-900">Query submitted: {formatTicketNumber(ticket.ticketNumber)}</h1>
       <p className="mt-1 text-sm text-emerald-900">
         Thanks for getting in touch. Our team will reply on the ticket, and you'll see it right away with no need
         to refresh.

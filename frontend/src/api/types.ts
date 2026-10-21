@@ -76,7 +76,8 @@ export interface Attachment {
 
 export interface AuthorTicket {
   id: string;
-  ticketNumber: string;
+  /** The contract leaves the type open; the backend sends an integer. Display via formatTicketNumber. */
+  ticketNumber: number | string;
   subject: string;
   description: string;
   status: TicketStatus;

@@ -73,3 +73,8 @@ export function formatRelative(from: string | number, now = Date.now()) {
 export function isOlderThanDays(from: string, days: number, now = Date.now()) {
   return ageMs(from, now) > days * DAY;
 }
+
+/** Backend ticket numbers are integers; show them as "#42". Pre-formatted strings pass through. */
+export function formatTicketNumber(n: number | string) {
+  return typeof n === 'number' || /^\d+$/.test(n) ? `#${n}` : n;
+}

@@ -192,7 +192,7 @@ export const handlers = [
     const n = 1001 + db.tickets.length;
     const ticket: MockTicket = {
       id: nextId('t'),
-      ticketNumber: `BL-${n}`,
+      ticketNumber: n,
       authorId: user.id,
       bookId,
       subject,
@@ -261,7 +261,7 @@ export const handlers = [
       if (to && time(t.createdAt) > time(to)) return false;
       if (q) {
         const author = findUser(t.authorId);
-        const hay = [t.ticketNumber, t.subject, t.description, author?.name, author?.email, findBook(t.bookId)?.title]
+        const hay = [`#${t.ticketNumber}`, t.subject, t.description, author?.name, author?.email, findBook(t.bookId)?.title]
           .join(' ')
           .toLowerCase();
         if (!hay.includes(q)) return false;

@@ -299,7 +299,7 @@ export function buildSeedDb(now = Date.now()): MockDb {
     const ai = s.ai && s.ai !== 'FAILED' ? s.ai : null;
     return {
       id: `t-${1001 + i}`,
-      ticketNumber: `BL-${1001 + i}`,
+      ticketNumber: 1001 + i,
       authorId: s.authorId,
       bookId: s.bookId,
       subject: s.subject,
@@ -326,5 +326,5 @@ export function buildSeedDb(now = Date.now()): MockDb {
     };
   });
 
-  return { version: 1, users, books, tickets, seq: 2000 };
+  return { version: 2, users, books, tickets, seq: 2000 };
 }
