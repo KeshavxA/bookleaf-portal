@@ -43,7 +43,7 @@ describe("ticket creation when the LLM is down", () => {
     // every attempt is accounted for in a single AiCall row
     const calls = await prisma.aiCall.findMany({ where: { ticketId: res.body.id } });
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ kind: "CLASSIFY", status: "ERROR", attempts: 3, errorCode: "UPSTREAM_ERROR" });
+    expect(calls[0]).toMatchObject({ kind: "CLASSIFY", provider: "anthropic", status: "ERROR", attempts: 3, errorCode: "UPSTREAM_ERROR" });
   });
 
   it("draft endpoint returns 200 with draft=null and an error so the admin can reply manually", async () => {

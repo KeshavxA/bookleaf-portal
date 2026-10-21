@@ -208,6 +208,8 @@ model AiCall {
   ticketId         String?
   ticket           Ticket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
   kind             AiCallKind
+  // "anthropic" | "gemini". Nullable so rows written before this column existed stay untouched (null = unknown).
+  provider         String?
   model            String
   status           AiCallStatus
   attempts         Int          @default(1)
