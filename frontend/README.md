@@ -14,7 +14,7 @@ cd frontend
 npm install
 npm run dev          # http://localhost:5173, mock mode by default
 npm test             # vitest + Testing Library
-npm run build        # type-check + production build to dist/
+VITE_API_URL=https://your-api.example.com/api/v1 npm run build:verify   # production build + bundle check
 ```
 
 Demo logins (password `Passw0rd!` for all):
@@ -35,7 +35,7 @@ Configuration lives in `.env.development`, with documented defaults in `.env.exa
 
 | Variable           | Default            | Purpose                                                                                 |
 | ------------------ | ------------------ | --------------------------------------------------------------------------------------- |
-| `VITE_USE_MOCKS`   | `true`             | Serve every API call, including SSE, from MSW in the browser.                           |
+| `VITE_USE_MOCKS`   | `true`             | Dev only: serve every API call, including SSE, from MSW. Production builds refuse `true`. |
 | `VITE_API_URL`     | `/api/v1`          | API base including `/api/v1`. A relative URL goes through the Vite dev proxy (no CORS). |
 | `DEV_PROXY_TARGET` | `http://localhost:4000` | Dev server only: where `/api` is proxied.                                          |
 | `VITE_MOCK_AI_DOWN`| `false`            | Mock only: drafts and classification fail, to show the manual fallbacks.               |
@@ -79,8 +79,10 @@ response shape matched the types, and SSE events reached the author through the 
   bus. It uses the same role scoping as the contract: authors only get events for their own tickets, and
   never `ticket.created` or `ticket.ai_ready`.
 
-The mock is dynamically imported only when `VITE_USE_MOCKS=true`. Production builds contain no MSW,
-seed data or demo credentials (checked by grepping `dist/`).
+Mocks can't run in a production build. `USE_MOCKS` is gated on `!import.meta.env.PROD`, so `vite build`
+folds it to `false` and drops the MSW import. The worker file is served by a dev-server-only plugin
+rather than from `public/`, and `vite build` fails if `VITE_USE_MOCKS=true`. `npm run build:verify` and
+`scripts/prodBuild.test.mjs` check the output for MSW, mock data and demo credentials.
 
 ## Structure
 
@@ -102,6 +104,7 @@ src/
                   needsManualTriage), serverErrors (contract errors → react-hook-form), tokenStorage
   mocks/          MSW handlers, in-browser DB, seed builder, AI stand-ins
   test/           Test utilities and end-to-end author and admin flows against the MSW handlers
+scripts/          verify-prod-build.mjs (bundle check) and prodBuild.test.mjs (real build in a test)
 ```
 
 ### Routes
@@ -173,10 +176,16 @@ Signing in with the wrong role for a URL redirects you to your own home page.
   `aria-describedby`). Loading regions are `role="status"` with names. The live cue is `aria-live`.
   There's a skip link and visible focus rings.
 - **No secrets.** The frontend never talks to an LLM. All AI goes through the backend.
+- **Multi-tab sessions.** The token in `localStorage` is shared by every tab. `AuthProvider` listens for
+  `storage` events on the token key and re-checks `/auth/me`. The `SessionWatcher` root layout then
+  redirects the tab to the new user's home, or to `/login` (*"You were signed out in another tab"*) if
+  the token was removed. Cached queries are cleared whenever the identity changes. As a backstop, the
+  fetch wrapper re-checks the session on any 403 before showing it. A 403 that survives the re-check
+  shows *"You don't have access to this"*. 4xx responses are never retried.
 
 ## Tests
 
-`npm test` runs 59 tests:
+`npm test` runs 83 tests:
 
 - `hooks/useEventStream.test.ts`: auth header, open, event filtering, drops and backoff, 401 stops
   retrying, abort on unmount (`fetch-event-source` is mocked).
@@ -190,6 +199,14 @@ Signing in with the wrong role for a URL redirects you to your own home page.
 - `features/tickets/authorTickets.test.tsx`: `#42`, the reopen hint, the closed state, the 409 path, server
   field errors on the follow-up and new-ticket forms (dotted paths, `(root)`, 429).
 - `lib/serverErrors.test.ts`: field/root mapping and rate-limit wording.
+- `features/auth/multiTab.test.tsx`: `storage` events (admin→author goes to `/books`, author→admin goes to
+  `/admin`, sign-out goes to `/login`, same user stays and adopts the new token, other keys ignored), the
+  403 re-check (swapped token redirects; a genuine 403 shows the access message and isn't retried) and the
+  retry rule.
+- `features/admin/QueuePage.test.tsx`: the default request sends `sort=urgency`, clearing returns to it.
+- `lib/config.test.ts`: `USE_MOCKS` is false in production even if `VITE_USE_MOCKS=true`.
+- `scripts/prodBuild.test.mjs`: runs a real production build. Checks no MSW, mock data or demo password,
+  no worker file, an absolute API URL and no relative `/api/v1`, and that unsafe env is refused.
 - `mocks/handlers.test.ts`: the mock layer against contract v1.1 (no `messages` on lists, filters, PATCH
   no-op, `/classify`, reply defaults, follow-up rules, error details, 429).
 - `features/books/BookCard.test.tsx`: INR formatting, "No payouts yet", in-production dashes and stage,
@@ -199,6 +216,78 @@ Signing in with the wrong role for a URL redirects you to your own home page.
   open ticket, a new ticket appearing in the queue as "Classifying..." until `ai_ready`), multi-value
   filters, `#number` search, a draft re-requested after an override and after an author follow-up, reply
   defaults, internal notes, and Retry AI triage on the failed-AI ticket.
+
+## Deploying
+
+The frontend is a static site (`dist/`) that talks to a separately hosted backend. `VITE_*` variables are
+**inlined at build time**, so changing `VITE_API_URL` means rebuilding and redeploying.
+
+Production env (see `.env.production.example`):
+
+| Variable         | Value                                            |
+| ---------------- | ------------------------------------------------ |
+| `VITE_API_URL`   | Absolute backend URL with `/api/v1`, e.g. `https://bookleaf-api.onrender.com/api/v1` |
+| `VITE_USE_MOCKS` | `false` (the build refuses `true`)               |
+
+The build fails if `VITE_API_URL` is missing, and warns if it's relative, because nothing proxies `/api` on
+a static host. Every deep link (`/tickets/:id`, `/admin/tickets/:id`) needs an SPA rewrite to `/index.html`.
+
+### Render (static site)
+
+1. Either use the Blueprint: **New → Blueprint**, pick this repo, and set the Blueprint path to
+   `frontend/render.yaml` (or copy its service into a repo-root `render.yaml`). Or create it by hand:
+   **New → Static Site** with Root Directory `frontend`, Build Command `npm ci && npm run build` and
+   Publish Directory `dist`.
+2. Set `VITE_API_URL` under Environment. The Blueprint leaves it `sync: false` so you're prompted for it.
+3. By hand only: under **Redirects/Rewrites**, add Source `/*`, Destination `/index.html`, Action
+   **Rewrite**. The Blueprint already includes this.
+4. Deploy, then add the site's origin (e.g. `https://bookleaf-portal-web.onrender.com`) to the backend's
+   `CORS_ORIGINS` and restart the backend.
+
+### Vercel
+
+1. Import the repo and set **Root Directory** to `frontend`. `vercel.json` sets the Vite framework, the
+   build command, `dist` as output and the SPA rewrite.
+2. Add `VITE_API_URL` (and `VITE_USE_MOCKS=false`) under Settings → Environment Variables for Production
+   (and Preview, if you use preview deploys).
+3. Deploy, then add the Vercel origin to the backend's `CORS_ORIGINS`. Preview deploys get a new URL each
+   time, so either allow them explicitly or test against Production only.
+
+### Railway
+
+Railway has no static-site rewrite config like the two above. Set Root Directory `frontend`, Build
+Command `npm ci && npm run build`, and Start Command `npx serve@14 -s dist -l $PORT` (`-s` gives the SPA
+fallback). Set `VITE_API_URL` as a service variable; it must be present at build time. This route wasn't
+tested.
+
+### Backend CORS (required)
+
+The browser calls the API cross-origin and sends `Authorization: Bearer …` on every authenticated
+request, including the SSE stream (`@microsoft/fetch-event-source` is a `fetch`). That triggers a
+preflight, so the backend must answer `OPTIONS` with:
+
+| Header                         | Value                                                          |
+| ------------------------------ | -------------------------------------------------------------- |
+| `Access-Control-Allow-Origin`  | The exact frontend origin, e.g. `https://bookleaf-portal-web.onrender.com` (no path, no trailing slash) |
+| `Access-Control-Allow-Methods` | `GET, POST, PATCH, OPTIONS`                                    |
+| `Access-Control-Allow-Headers` | `Authorization, Content-Type`                                  |
+| `Vary`                         | `Origin`                                                       |
+
+`Accept: text/event-stream` is a CORS-safelisted header, so it needn't be listed. No cookies are used, so
+`Access-Control-Allow-Credentials` isn't needed. The real responses, including the long-lived
+`GET /events` stream, must carry `Access-Control-Allow-Origin` too. The backend already does all of this
+for whatever is listed in `CORS_ORIGINS` (comma-separated), so a deploy only needs the frontend origin
+added there.
+
+### Checking a production build locally
+
+```bash
+VITE_API_URL=http://localhost:4000/api/v1 npm run build:verify
+npx vite preview            # http://localhost:4173, no dev proxy
+```
+
+Add `http://localhost:4173` to the backend's `CORS_ORIGINS` (the default only allows `:5173` and `:3000`),
+or the browser will block login.
 
 ## Known limitations
 
