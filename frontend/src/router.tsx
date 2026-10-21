@@ -1,10 +1,11 @@
-import { createBrowserRouter, Link } from 'react-router';
+import { createBrowserRouter, Link, type RouteObject } from 'react-router';
 import { AppShell, type NavItem } from '@/components/AppShell';
 import { EmptyState } from '@/components/States';
 import { AdminTicketPage } from '@/features/admin/AdminTicketPage';
 import { QueuePage } from '@/features/admin/QueuePage';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { HomeRedirect, RequireRole } from '@/features/auth/RequireRole';
+import { SessionWatcher } from '@/features/auth/SessionWatcher';
 import { BooksPage } from '@/features/books/BooksPage';
 import { NewTicketPage } from '@/features/tickets/NewTicketPage';
 import { TicketDetailPage } from '@/features/tickets/TicketDetailPage';
@@ -28,34 +29,43 @@ function NotFound() {
   );
 }
 
-export const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage /> },
-  { path: '/', element: <HomeRedirect /> },
+/** Route tree, exported so tests can mount it in a memory router. */
+export const routes: RouteObject[] = [
   {
-    element: <RequireRole role="AUTHOR" />,
+    // Root layout: follows sign-ins and sign-outs from other tabs.
+    element: <SessionWatcher />,
     children: [
+      { path: '/login', element: <LoginPage /> },
+      { path: '/', element: <HomeRedirect /> },
       {
-        element: <AppShell nav={authorNav} area="Author Portal" />,
+        element: <RequireRole role="AUTHOR" />,
         children: [
-          { path: '/books', element: <BooksPage /> },
-          { path: '/tickets', element: <TicketsPage /> },
-          { path: '/tickets/new', element: <NewTicketPage /> },
-          { path: '/tickets/:id', element: <TicketDetailPage /> },
+          {
+            element: <AppShell nav={authorNav} area="Author Portal" />,
+            children: [
+              { path: '/books', element: <BooksPage /> },
+              { path: '/tickets', element: <TicketsPage /> },
+              { path: '/tickets/new', element: <NewTicketPage /> },
+              { path: '/tickets/:id', element: <TicketDetailPage /> },
+            ],
+          },
         ],
       },
-    ],
-  },
-  {
-    element: <RequireRole role="ADMIN" />,
-    children: [
       {
-        element: <AppShell nav={adminNav} area="Support Admin" />,
+        element: <RequireRole role="ADMIN" />,
         children: [
-          { path: '/admin', element: <QueuePage /> },
-          { path: '/admin/tickets/:id', element: <AdminTicketPage /> },
+          {
+            element: <AppShell nav={adminNav} area="Support Admin" />,
+            children: [
+              { path: '/admin', element: <QueuePage /> },
+              { path: '/admin/tickets/:id', element: <AdminTicketPage /> },
+            ],
+          },
         ],
       },
+      { path: '*', element: <NotFound /> },
     ],
   },
-  { path: '*', element: <NotFound /> },
-]);
+];
+
+export const router = createBrowserRouter(routes);

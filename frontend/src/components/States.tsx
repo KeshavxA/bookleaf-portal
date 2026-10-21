@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { errorMessage } from '@/api/client';
+import { Link } from 'react-router';
+import { ApiError, errorMessage } from '@/api/client';
 import { cn } from '@/lib/cn';
 import { Button } from './Button';
 
@@ -14,6 +15,18 @@ export function EmptyState({ title, children, action }: { title: string; childre
 }
 
 export function ErrorState({ error, onRetry, title = "We couldn't load this" }: { error: unknown; onRetry?: () => void; title?: string }) {
+  // A 403 that survives the session re-check is a real permission problem; retrying won't help.
+  if (error instanceof ApiError && error.status === 403) {
+    return (
+      <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-6 py-8 text-center">
+        <h2 className="text-base font-semibold text-amber-900">You don't have access to this</h2>
+        <p className="mt-1 text-sm text-amber-900">This page isn't available for your account.</p>
+        <Link to="/" className="mt-4 inline-block text-sm font-medium text-brand-700 hover:underline">
+          Go to your dashboard
+        </Link>
+      </div>
+    );
+  }
   return (
     <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-6 py-8 text-center">
       <h2 className="text-base font-semibold text-red-900">{title}</h2>

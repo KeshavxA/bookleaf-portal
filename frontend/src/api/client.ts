@@ -40,6 +40,16 @@ function parseDetails(raw: unknown): ErrorDetail[] {
 }
 
 let onUnauthorized: (() => void) | null = null;
+let onForbidden: (() => Promise<void>) | null = null;
+
+/**
+ * AuthContext registers a session re-check here. A 403 on an authenticated call often means another
+ * tab signed in as a different user (the token in localStorage is shared), so the session is
+ * re-validated before the error reaches the UI.
+ */
+export function setForbiddenHandler(handler: (() => Promise<void>) | null) {
+  onForbidden = handler;
+}
 
 /** AuthContext registers its logout here so any 401 from an authenticated call ends the session. */
 export function setUnauthorizedHandler(handler: (() => void) | null) {
@@ -111,6 +121,10 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   if (!res.ok) {
     // A 401 on an authenticated request means the session is gone. A 401 on login is just bad credentials.
     if (res.status === 401 && token) notifyUnauthorized();
+    // Re-check who we are before surfacing the 403. /auth/me itself is excluded to avoid recursion.
+    if (res.status === 403 && token && path !== '/auth/me' && onForbidden) {
+      await onForbidden().catch(() => undefined);
+    }
     if (isErrorBody(data)) {
       const { code, message, details } = data.error;
       throw new ApiError(res.status, code, message, parseDetails(details));

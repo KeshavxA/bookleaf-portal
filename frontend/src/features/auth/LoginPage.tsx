@@ -67,6 +67,7 @@ export function LoginPage() {
         </div>
         <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           {logoutReason === 'expired' && <Banner tone="warning">Your session has expired. Please sign in again.</Banner>}
+          {logoutReason === 'elsewhere' && <Banner tone="info">You were signed out in another tab.</Banner>}
           {errors.root?.server?.message && <Banner tone="error">{errors.root.server.message}</Banner>}
           <Field label="Email" error={errors.email?.message}>
             {(p) => <Input {...p} type="email" autoComplete="email" autoFocus {...register('email')} />}
