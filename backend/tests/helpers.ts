@@ -4,6 +4,7 @@ import { buildContainer } from "../src/container";
 import { createApp } from "../src/app";
 import { prisma } from "../src/lib/prisma";
 import { LlmClient } from "../src/ai/llm/client";
+import { AnthropicProvider } from "../src/ai/llm/providers/anthropic";
 import { CircuitBreaker } from "../src/ai/llm/circuitBreaker";
 import { AiCallRepository } from "../src/repositories/aiCallRepository";
 import type { LlmPort } from "../src/ai/llm/types";
@@ -18,13 +19,15 @@ type FakeCreate = (params: Anthropic.MessageCreateParamsNonStreaming) => Promise
 /** A real LlmClient (retries, breaker, AiCall logging) over a fake SDK transport. */
 export function llmWithFakeSdk(create: FakeCreate, opts: { threshold?: number } = {}): LlmClient {
   return new LlmClient({
-    apiKey: "test-key",
-    model: "claude-haiku-5-5",
+    provider: new AnthropicProvider({
+      apiKey: "test-key",
+      model: "claude-haiku-5-5",
+      sdk: { messages: { create } } as unknown as Pick<Anthropic, "messages">,
+    }),
     timeoutMs: 1000,
     maxRetries: 2,
     breaker: new CircuitBreaker({ threshold: opts.threshold ?? 100, cooldownMs: 60_000 }),
     recorder: new AiCallRepository(prisma),
-    sdk: { messages: { create } } as unknown as Pick<Anthropic, "messages">,
     sleep: async () => {},
   });
 }

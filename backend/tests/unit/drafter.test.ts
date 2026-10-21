@@ -89,7 +89,7 @@ describe("draft prompt", () => {
   it("sends only the KB section for the ticket's category, with cache breakpoints", () => {
     const { system } = buildDraftPrompt(ctx());
     expect(system).toHaveLength(2);
-    expect(system.every((b) => b.cache_control?.type === "ephemeral")).toBe(true);
+    expect(system.every((b) => b.cache === true)).toBe(true);
     expect(system[1]!.text).toContain(kbSectionFor("ROYALTY_PAYMENTS"));
     expect(system[1]!.text).not.toContain("Printing & Quality");
     // static prefix must be byte-identical across tickets, or the cache never hits
@@ -133,7 +133,7 @@ describe("drafter output handling", () => {
       model: "fake",
       async complete(req, parse) {
         seen = req;
-        const response = { text: body, model: "fake", stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, latencyMs: 1, attempts: 1 };
+        const response = { text: body, model: "fake", stopReason: "end" as const, usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }, latencyMs: 1, attempts: 1 };
         return { value: parse(response), response };
       },
     };

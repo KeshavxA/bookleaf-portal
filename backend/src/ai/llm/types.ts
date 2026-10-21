@@ -1,5 +1,3 @@
-import type Anthropic from "@anthropic-ai/sdk";
-
 export type AiCallKind = "CLASSIFY" | "DRAFT";
 
 export type AiCallStatus =
@@ -21,10 +19,13 @@ export interface TokenUsage {
 
 export const ZERO_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
+export type LlmProviderName = "anthropic" | "gemini";
+
 /** What gets persisted for every logical LLM call (see AiCall model). */
 export interface AiCallRecord extends TokenUsage {
   ticketId: string | null;
   kind: AiCallKind;
+  provider: LlmProviderName;
   model: string;
   status: AiCallStatus;
   attempts: number;
@@ -39,23 +40,42 @@ export interface AiCallRecorder {
   record(call: AiCallRecord): Promise<void>;
 }
 
+/** A block of system prompt. Order matters: static blocks first so prefixes can be cached. */
+export interface SystemBlock {
+  text: string;
+  /**
+   * Ask for an explicit cache breakpoint after this block. Anthropic honours it
+   * (cache_control); providers without explicit prompt caching ignore it.
+   */
+  cache?: boolean;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Provider-neutral request built by the classifier and drafter. */
 export interface LlmRequest {
   kind: AiCallKind;
   ticketId?: string | null;
-  system: Anthropic.TextBlockParam[];
-  messages: Anthropic.MessageParam[];
+  system: SystemBlock[];
+  messages: ChatMessage[];
   maxTokens: number;
   effort?: "low" | "medium" | "high";
-  /** "disabled" is only valid at effort <= high on current Haiku; fine for short structured calls. */
+  /** "disabled" = as little thinking as the model allows (off on Anthropic Haiku, a minimal level on Gemini). */
   thinking?: "adaptive" | "disabled";
   /** Structured output: constrains the response to this JSON schema. */
   jsonSchema?: Record<string, unknown>;
 }
 
+/** Normalised across providers. Parsers check "max_tokens"; the client handles "refusal". */
+export type StopReason = "end" | "max_tokens" | "refusal" | "other";
+
 export interface LlmResponse {
   text: string;
   model: string;
-  stopReason: string | null;
+  stopReason: StopReason;
   usage: TokenUsage;
   latencyMs: number;
   attempts: number;
@@ -66,6 +86,48 @@ export interface LlmResponse {
  * INVALID_OUTPUT (recorded, not retried, does not trip the circuit breaker).
  */
 export type ResponseParser<T> = (response: LlmResponse) => T;
+
+/** One attempt against a provider; LlmClient owns retries, the breaker and AiCall logging. */
+export interface ProviderRequest extends Omit<LlmRequest, "kind" | "ticketId"> {
+  timeoutMs: number;
+}
+
+export interface ProviderResult {
+  text: string;
+  model: string;
+  stopReason: StopReason;
+  usage: TokenUsage;
+  latencyMs: number;
+}
+
+/** How a failed attempt should be handled. Produced by the provider that knows its SDK's errors. */
+export interface ClassifiedError {
+  code: LlmErrorCode;
+  status: AiCallStatus;
+  message: string;
+  retryable: boolean;
+  /** Says something about upstream availability (feeds the circuit breaker). */
+  upstreamFailure: boolean;
+  /** Server-requested wait before retrying. */
+  retryAfterMs?: number;
+  /** Quota used up (not a momentary rate limit): open the breaker now instead of retrying. */
+  quotaExhausted?: boolean;
+}
+
+/**
+ * The provider seam: everything the classifier and drafter need from a model.
+ * Implementations: AnthropicProvider, GeminiProvider (src/ai/llm/providers/).
+ */
+export interface LlmProvider {
+  readonly name: LlmProviderName;
+  readonly model: string;
+  /** False when the provider's API key is not configured. */
+  readonly enabled: boolean;
+  generate(request: ProviderRequest): Promise<ProviderResult>;
+  classifyError(err: unknown): ClassifiedError;
+  /** USD estimate for the AiCall.estCost column. */
+  estimateCost(usage: TokenUsage): number;
+}
 
 /** The only surface the classifier/drafter depend on - trivially mockable in tests. */
 export interface LlmPort {

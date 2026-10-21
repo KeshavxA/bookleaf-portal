@@ -34,8 +34,8 @@ export class TicketClassifier {
         {
           kind: "CLASSIFY",
           ticketId,
-          // Identical on every call and above the 512-token cache minimum: cached reads are 10% of input price.
-          system: [{ type: "text", text: CLASSIFIER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+          // Identical on every call: Anthropic caches it explicitly (cached reads are 10% of input price).
+          system: [{ text: CLASSIFIER_SYSTEM_PROMPT, cache: true }],
           messages: buildClassifierMessages(input),
           maxTokens: CLASSIFIER_MAX_TOKENS,
           effort: "low",

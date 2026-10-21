@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LlmClient } from "../src/ai/llm/client";
 import { CircuitBreaker } from "../src/ai/llm/circuitBreaker";
+import { AnthropicProvider } from "../src/ai/llm/providers/anthropic";
 import type { AiCallRecord } from "../src/ai/llm/types";
 import { TicketClassifier } from "../src/ai/classifier/classifier";
 import { TicketDrafter } from "../src/ai/drafter/drafter";
@@ -163,8 +164,7 @@ async function main() {
 
   const records: AiCallRecord[] = [];
   const llm = new LlmClient({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    model: process.env.LLM_MODEL ?? "claude-haiku-5-5",
+    provider: new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.LLM_MODEL ?? "claude-haiku-5-5" }),
     timeoutMs: Number(process.env.LLM_TIMEOUT_MS ?? 15_000),
     maxRetries: 2,
     breaker: new CircuitBreaker({ threshold: 5, cooldownMs: 30_000 }),

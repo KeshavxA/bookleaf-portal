@@ -22,8 +22,14 @@ const RATES: Record<string, Rate> = {
 const CACHE_WRITE_MULTIPLIER = 1.25;
 const CACHE_READ_MULTIPLIER = 0.1;
 
-export function estimateCostUsd(model: string, usage: TokenUsage): number {
-  const rate = RATES[model];
+/** USD per million tokens set by env (ANTHROPIC_PRICE_*_PER_MTOK); replaces the built-in rate card. */
+export interface PriceOverride {
+  inputPerMTok: number;
+  outputPerMTok: number;
+}
+
+export function estimateCostUsd(model: string, usage: TokenUsage, override?: PriceOverride): number {
+  const rate: Rate | undefined = override ? { input: override.inputPerMTok, output: override.outputPerMTok } : RATES[model];
   if (!rate) return 0;
   const promptTokens = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const useLong = rate.longPrompt !== undefined && promptTokens > rate.longPrompt.aboveTokens;

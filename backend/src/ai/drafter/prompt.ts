@@ -1,4 +1,4 @@
-import type Anthropic from "@anthropic-ai/sdk";
+import type { ChatMessage, SystemBlock } from "../llm/types";
 import { kbSectionFor } from "../kb";
 import { formatHumanDate } from "../../lib/dates";
 import { escapeTags, userText } from "../promptText";
@@ -14,14 +14,15 @@ const MESSAGE_MAX_CHARS = 1500;
  * Prompt layout (stable -> volatile, so the prefix caches):
  *   system[0] static instructions           cache breakpoint (shared by every draft)
  *   system[1] KB section for this category  cache breakpoint (shared per category)
+ * (Breakpoints are explicit on Anthropic; Gemini can only benefit from implicit prefix caching.)
  *   user      FACTS + original query + last N thread messages
  *
  * Everything the author (or staff) typed goes through userText(): escaped so it
  * cannot close <original_query>/<thread> or forge a <facts> block, and capped in length.
  */
 export function buildDraftPrompt(ctx: DraftContext): {
-  system: Anthropic.TextBlockParam[];
-  messages: Anthropic.MessageParam[];
+  system: SystemBlock[];
+  messages: ChatMessage[];
   factsText: string;
 } {
   const facts = buildFacts(ctx);
@@ -61,8 +62,8 @@ ${task}`;
 
   return {
     system: [
-      { type: "text", text: DRAFTER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
-      { type: "text", text: `<policy>\n${kbSectionFor(ctx.ticket.category)}\n</policy>`, cache_control: { type: "ephemeral" } },
+      { text: DRAFTER_SYSTEM_PROMPT, cache: true },
+      { text: `<policy>\n${kbSectionFor(ctx.ticket.category)}\n</policy>`, cache: true },
     ],
     messages: [{ role: "user", content: user }],
     factsText: facts,

@@ -17,7 +17,7 @@ function fakeLlm(text: string | (() => never)): LlmPort & { calls: LlmRequest[] 
       const response: LlmResponse = {
         text: text as string,
         model: "fake",
-        stopReason: "end_turn",
+        stopReason: "end",
         usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
         latencyMs: 1,
         attempts: 1,

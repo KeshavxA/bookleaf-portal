@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import Anthropic from "@anthropic-ai/sdk";
 import { LlmClient } from "../../src/ai/llm/client";
+import { AnthropicProvider } from "../../src/ai/llm/providers/anthropic";
 import { CircuitBreaker } from "../../src/ai/llm/circuitBreaker";
 import { LlmError, LlmOutputError, type AiCallRecord, type LlmRequest } from "../../src/ai/llm/types";
 import { estimateCostUsd } from "../../src/ai/llm/pricing";
 import { fakeMessage } from "../helpers";
 
-const req: LlmRequest = { kind: "CLASSIFY", ticketId: "t1", system: [{ type: "text", text: "s" }], messages: [], maxTokens: 10 };
+const req: LlmRequest = { kind: "CLASSIFY", ticketId: "t1", system: [{ text: "s" }], messages: [], maxTokens: 10 };
 const identity = (r: { text: string }) => r.text;
 
 function setup(create: (...a: unknown[]) => Promise<unknown>, opts: { apiKey?: string; threshold?: number } = {}) {
@@ -14,13 +15,15 @@ function setup(create: (...a: unknown[]) => Promise<unknown>, opts: { apiKey?: s
   const sdkCreate = vi.fn(create);
   const breaker = new CircuitBreaker({ threshold: opts.threshold ?? 3, cooldownMs: 60_000 });
   const client = new LlmClient({
-    apiKey: "apiKey" in opts ? opts.apiKey : "k",
-    model: "claude-haiku-5-5",
+    provider: new AnthropicProvider({
+      apiKey: "apiKey" in opts ? opts.apiKey : "k",
+      model: "claude-haiku-5-5",
+      sdk: "apiKey" in opts && !opts.apiKey ? undefined : ({ messages: { create: sdkCreate } } as never),
+    }),
     timeoutMs: 1000,
     maxRetries: 2,
     breaker,
     recorder: { record: async (r) => void records.push(r) },
-    sdk: "apiKey" in opts && !opts.apiKey ? undefined : ({ messages: { create: sdkCreate } } as never),
     sleep: async () => {},
   });
   return { client, records, sdkCreate, breaker };
@@ -123,13 +126,15 @@ describe("LlmClient", () => {
 
   it("a failing recorder never breaks the call", async () => {
     const client = new LlmClient({
-      apiKey: "k",
-      model: "claude-haiku-5-5",
+      provider: new AnthropicProvider({
+        apiKey: "k",
+        model: "claude-haiku-5-5",
+        sdk: { messages: { create: async () => fakeMessage("ok") } } as never,
+      }),
       timeoutMs: 1000,
       maxRetries: 0,
       breaker: new CircuitBreaker({ threshold: 3, cooldownMs: 1 }),
       recorder: { record: async () => Promise.reject(new Error("db down")) },
-      sdk: { messages: { create: async () => fakeMessage("ok") } } as never,
     });
     await expect(client.complete(req, identity)).resolves.toMatchObject({ value: "ok" });
   });
