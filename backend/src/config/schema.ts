@@ -13,6 +13,11 @@ const bool = z
 /** The placeholder shipped in .env.example. Fine for local dev, never for production. */
 export const DEV_DEFAULT_JWT_SECRET = "change-me-to-a-long-random-string-at-least-32-chars";
 const MIN_JWT_SECRET_LENGTH = 32;
+/**
+ * Gemini's free tier showed single calls of 1-15 s and one 15 s timeout in the first eval,
+ * so it gets a longer default. LLM_TIMEOUT_MS overrides either.
+ */
+export const DEFAULT_TIMEOUT_MS = { anthropic: 15_000, gemini: 30_000 } as const;
 /** Only Anthropic has a default model. Gemini ids change too often to hardcode one. */
 export const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5";
 
@@ -58,7 +63,8 @@ const EnvSchema = z
     // Gemini: default 0 (free tier). Set the paid rates if you use a billed project.
     GEMINI_PRICE_INPUT_PER_MTOK: optionalPrice.transform((v) => v ?? 0),
     GEMINI_PRICE_OUTPUT_PER_MTOK: optionalPrice.transform((v) => v ?? 0),
-    LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+    // Per-attempt timeout. Default depends on the provider (see DEFAULT_TIMEOUT_MS); set to override both.
+    LLM_TIMEOUT_MS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().positive().optional()),
     LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     LLM_BREAKER_THRESHOLD: z.coerce.number().int().positive().default(5),
     LLM_BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30_000),
@@ -76,6 +82,7 @@ const EnvSchema = z
     JWT_SECRET: e.JWT_SECRET ?? DEV_DEFAULT_JWT_SECRET,
     // Empty only when Gemini is selected without a model, which parseEnv rejects.
     LLM_MODEL: e.LLM_MODEL ?? (e.LLM_PROVIDER === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : ""),
+    LLM_TIMEOUT_MS: e.LLM_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS[e.LLM_PROVIDER],
   }));
 
 export type Env = z.infer<typeof EnvSchema>;
