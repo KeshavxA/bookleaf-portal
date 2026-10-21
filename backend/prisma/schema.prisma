@@ -1,0 +1,227 @@
+// BookLeaf Author Support Portal - data model.
+// Money is stored as integer INR (matches the API contract). Dataset ids
+// (AUTH001, BK001) are kept as primary keys so seed data stays traceable.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  AUTHOR
+  ADMIN
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum Category {
+  ROYALTY_PAYMENTS
+  ISBN_METADATA
+  PRINTING_QUALITY
+  DISTRIBUTION_AVAILABILITY
+  BOOK_STATUS_PRODUCTION
+  GENERAL_INQUIRY
+}
+
+// Declaration order matters: Postgres sorts enums by declaration order,
+// so ORDER BY priority ASC yields CRITICAL first (used by the urgency sort).
+enum Priority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum AiStatus {
+  PENDING
+  DONE
+  FAILED
+}
+
+enum SenderType {
+  AUTHOR
+  ADMIN
+}
+
+enum DraftSource {
+  AI
+  FALLBACK
+}
+
+enum AiCallKind {
+  CLASSIFY
+  DRAFT
+}
+
+enum AiCallStatus {
+  SUCCESS
+  ERROR
+  TIMEOUT
+  RATE_LIMITED
+  INVALID_OUTPUT
+  REFUSED
+  CIRCUIT_OPEN
+  DISABLED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  author          Author?
+  assignedTickets Ticket[]        @relation("TicketAssignee")
+  messages        TicketMessage[]
+  internalNotes   InternalNote[]
+}
+
+model Author {
+  id         String    @id // dataset author_id, e.g. AUTH001
+  userId     String    @unique
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone      String?
+  city       String?
+  joinedDate DateTime? @db.Date
+  // Not present in the dataset: null means "unknown", which the drafter
+  // turns into a request to confirm bank details in the dashboard.
+  bankLinked Boolean?
+
+  books   Book[]
+  tickets Ticket[]
+}
+
+model Book {
+  id                    String    @id // dataset book_id, e.g. BK001
+  authorId              String
+  author                Author    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title                 String
+  isbn                  String    @unique
+  genre                 String
+  publicationDate       DateTime? @db.Date
+  status                String // free text from the dataset, e.g. "In Production - Cover Design"
+  mrp                   Int?
+  authorRoyaltyPerCopy  Int?
+  totalCopiesSold       Int       @default(0)
+  totalRoyaltyEarned    Int       @default(0)
+  royaltyPaid           Int       @default(0)
+  royaltyPending        Int       @default(0)
+  lastRoyaltyPayoutDate DateTime? @db.Date
+  printPartner          String?
+  availableOn           String[]
+
+  tickets Ticket[]
+
+  @@index([authorId])
+}
+
+model Ticket {
+  id           String       @id @default(cuid())
+  ticketNumber Int          @unique @default(autoincrement())
+  authorId     String
+  author       Author       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  bookId       String?
+  book         Book?        @relation(fields: [bookId], references: [id], onDelete: SetNull)
+  subject      String
+  description  String
+  attachments  Json         @default("[]") // { name, size }[] metadata only
+  status       TicketStatus @default(OPEN)
+  // Denormalized from status (OPEN | IN_PROGRESS) so the urgency sort is a plain index scan.
+  isOpen       Boolean      @default(true)
+
+  // Effective triage values (AI result, keyword fallback, or admin override).
+  category           Category
+  priority           Priority
+  categoryOverridden Boolean  @default(false)
+  priorityOverridden Boolean  @default(false)
+
+  // Raw AI classification, kept separately so admins can see what the model said.
+  aiStatus       AiStatus  @default(PENDING)
+  aiCategory     Category?
+  aiPriority     Priority?
+  aiReasoning    String?
+  aiError        String?
+  aiClassifiedAt DateTime?
+
+  assigneeId String?
+  assignee   User?   @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  // Cached response draft. Cleared when a new author message arrives or the category changes.
+  draftBody        String?
+  draftSource      DraftSource?
+  draftGeneratedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages      TicketMessage[]
+  internalNotes InternalNote[]
+  aiCalls       AiCall[]
+
+  @@index([isOpen, priority, createdAt])
+  @@index([authorId, createdAt])
+  @@index([assigneeId])
+  @@index([category])
+  @@index([aiStatus])
+}
+
+model TicketMessage {
+  id           String     @id @default(cuid())
+  ticketId     String
+  ticket       Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderType   SenderType
+  senderUserId String
+  sender       User       @relation(fields: [senderUserId], references: [id])
+  body         String
+  createdAt    DateTime   @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+model InternalNote {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  adminId   String
+  admin     User     @relation(fields: [adminId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+// One row per logical LLM call (retries are folded into `attempts`).
+model AiCall {
+  id               String       @id @default(cuid())
+  ticketId         String?
+  ticket           Ticket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  kind             AiCallKind
+  model            String
+  status           AiCallStatus
+  attempts         Int          @default(1)
+  inputTokens      Int          @default(0)
+  outputTokens     Int          @default(0)
+  cacheReadTokens  Int          @default(0)
+  cacheWriteTokens Int          @default(0)
+  latencyMs        Int
+  estCost          Decimal      @default(0) @db.Decimal(12, 8) // USD
+  errorCode        String?
+  errorMessage     String?
+  createdAt        DateTime     @default(now())
+
+  @@index([ticketId])
+  @@index([createdAt])
+  @@index([kind, status])
+}
