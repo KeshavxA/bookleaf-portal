@@ -202,18 +202,27 @@ describe("date format check", () => {
 });
 
 describe("checkDraft", () => {
-  it("reports each check", () => {
+  it("reports each check, with word count as information only", () => {
     const draft = `Hi Meera,\n\nYes, you can update it. Your royalty is fine. Next payout 1 Sept 2025 for ₹9,999.\n\n${SIGN}`;
-    const checks = Object.fromEntries(checkDraft(draft, DESCRIPTION_Q, ["9,999"]).map((c) => [c.name, c.status]));
-    expect(checks).toEqual({
-      length: "fail",
+    const report = checkDraft(draft, DESCRIPTION_Q, ["9,999"]);
+    expect(report.words).toBe(16);
+    expect(report.points).toEqual([
+      { id: "direct", covered: true },
+      { id: "channels", covered: false },
+      { id: "3-5d", covered: false },
+    ]);
+    expect(Object.fromEntries(report.checks.map((c) => [c.name, c.status]))).toEqual({
+      "required points": "fail",
       "bank once": "pass",
       "no off-topic money": "fail",
       dates: "fail",
       "numbers grounded": "fail",
     });
+    expect(report.checks[0]!.detail).toBe("missing: channels, 3-5d");
+    expect(report.checks.map((c) => c.name)).not.toContain("length");
+
     const royalty = ctx("ROYALTY_PAYMENTS", "Royalty", "Where is it?");
-    expect(checkDraft(draft, royalty, []).find((c) => c.name === "no off-topic money")!.status).toBe("n/a");
+    expect(checkDraft(draft, royalty, []).checks.find((c) => c.name === "no off-topic money")!.status).toBe("n/a");
   });
 });
 

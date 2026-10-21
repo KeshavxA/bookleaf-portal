@@ -6,10 +6,15 @@
  * classifier and drafter of the configured provider (LLM_PROVIDER / LLM_MODEL),
  * using facts built from the seed dataset. Prints expected vs actual triage, the
  * draft, and token cost, then a pass/fail table of automatic draft checks
- * (src/ai/drafter/checks.ts): length (target 100-180 words, WARN for 80-220), bank
- * details asked at most once, no royalty/payout/bank text on non-payment tickets,
- * house date format, no ungrounded numbers. No database needed. Requires the
- * selected provider's key.
+ * (src/ai/drafter/checks.ts):
+ *   - required points: each KB point that applies to the ticket's category, by keyword
+ *     (src/ai/drafter/requiredPoints.ts documents every test), shown per point
+ *   - bank details asked at most once
+ *   - no royalty/payout/bank text on non-payment tickets
+ *   - house date format ("14 Nov 2026")
+ *   - no ungrounded numbers
+ * Word count is printed as information only, never pass/fail. No database needed.
+ * Requires the selected provider's key.
  *
  * A failed call (rate limit, quota, timeout) is reported for that ticket and the
  * run continues. A pause between calls keeps a free-tier key under its per-minute
@@ -26,7 +31,7 @@ import { ConfigError, parseEnv } from "../src/config/schema";
 import { TicketClassifier } from "../src/ai/classifier/classifier";
 import { TicketDrafter } from "../src/ai/drafter/drafter";
 import type { DraftBookInput, DraftContext } from "../src/ai/drafter/types";
-import { bodyWordCount, checkDraft, type DraftCheck } from "../src/ai/drafter/checks";
+import { bodyWordCount, checkDraft, type DraftCheck, type DraftCheckReport } from "../src/ai/drafter/checks";
 import type { Category, Priority } from "../src/domain/enums";
 
 interface EvalCase {
@@ -274,16 +279,16 @@ async function main() {
       console.log(`\nDraft (${bodyWordCount(draft.body)} words in the body):\n${draft.body}`);
       if (draft.ungroundedNumbers.length) console.log(`⚠ numbers not found in sources: ${draft.ungroundedNumbers.join(", ")}`);
       for (const w of draft.warnings) console.log(`⚠ ${w}`);
-      const checks = checkDraft(draft.body, ctx, draft.ungroundedNumbers);
-      const flagged = checks.filter((c) => c.status === "fail" || c.status === "warn");
-      if (flagged.length) console.log(`Checks: ${flagged.map((c) => `${c.name} ${c.status.toUpperCase()} (${c.detail})`).join("; ")}`);
-      checkRows.push({ n: i + 1, category: ctx.ticket.category, checks });
+      const report = checkDraft(draft.body, ctx, draft.ungroundedNumbers);
+      const flagged = report.checks.filter((c) => c.status === "fail");
+      if (flagged.length) console.log(`Checks: ${flagged.map((c) => `${c.name} FAIL (${c.detail})`).join("; ")}`);
+      checkRows.push({ n: i + 1, category: ctx.ticket.category, report });
     } catch (err) {
       // Per-ticket failure (rate limit, quota, timeout, bad output): report it and keep going.
       const code = err instanceof LlmError ? `${err.code}: ` : "";
       const msg = `${code}${err instanceof Error ? err.message : String(err)}`;
       console.log(`\nDraft failed: ${msg}`);
-      checkRows.push({ n: i + 1, category: ctx.ticket.category, checks: null, error: msg });
+      checkRows.push({ n: i + 1, category: ctx.ticket.category, report: null, error: msg });
     }
   }
 
@@ -313,50 +318,79 @@ async function main() {
   );
 }
 
-interface CheckRow {
+export interface CheckRow {
   n: number;
   category: string;
-  checks: DraftCheck[] | null;
+  report: DraftCheckReport | null;
   error?: string;
 }
 
-const MARK: Record<DraftCheck["status"], string> = { pass: "PASS", warn: "WARN", fail: "FAIL", "n/a": "n/a" };
-const CHECK_NAMES: DraftCheck["name"][] = ["length", "bank once", "no off-topic money", "dates", "numbers grounded"];
+const MARK: Record<DraftCheck["status"], string> = { pass: "PASS", fail: "FAIL", "n/a": "n/a" };
+const CHECK_NAMES: DraftCheck["name"][] = ["required points", "bank once", "no off-topic money", "dates", "numbers grounded"];
 
-function printCheckTable(rows: CheckRow[]) {
-  const cols = ["#", "category", "length", "bank once", "no off-topic money", "dates", "numbers grounded"];
-  const widths = [2, 25, 9, 9, 18, 5, 16];
+export function printCheckTable(rows: CheckRow[], log: (line: string) => void = console.log) {
+  const cols = ["#", "category", "words", "points", "bank once", "money", "dates", "numbers", "required points (+ covered, - missing)"];
+  const widths = [2, 25, 5, 6, 9, 5, 5, 7, 0];
   const fmt = (cells: string[]) => cells.map((c, i) => c.padEnd(widths[i]!)).join(" | ");
-  console.log(`\n${"─".repeat(78)}\nDRAFT CHECKS (length = body words; PASS 100-180, WARN 80-220, else FAIL)\n${"─".repeat(78)}`);
-  console.log(fmt(cols));
+  log(`\n${"─".repeat(78)}\nDRAFT CHECKS  (words = body words, information only; money = no off-topic money)\n${"─".repeat(78)}`);
+  log(fmt(cols));
   for (const r of rows) {
-    if (!r.checks) {
-      console.log(`${String(r.n).padEnd(2)} | ${r.category.padEnd(25)} | draft failed: ${r.error}`);
+    if (!r.report) {
+      log(`${String(r.n).padEnd(2)} | ${r.category.padEnd(25)} | draft failed: ${r.error}`);
       continue;
     }
-    const by = Object.fromEntries(r.checks.map((c) => [c.name, c])) as Record<DraftCheck["name"], DraftCheck>;
-    console.log(
+    const by = Object.fromEntries(r.report.checks.map((c) => [c.name, c])) as Record<DraftCheck["name"], DraftCheck>;
+    log(
       fmt([
         String(r.n),
         r.category,
-        `${MARK[by.length.status]} ${by.length.detail.replace(" words", "")}`,
-        ...CHECK_NAMES.slice(1).map((n) => MARK[by[n].status]),
+        String(r.report.words),
+        MARK[by["required points"].status],
+        MARK[by["bank once"].status],
+        MARK[by["no off-topic money"].status],
+        MARK[by.dates.status],
+        MARK[by["numbers grounded"].status],
+        r.report.points.map((p) => `${p.id}${p.covered ? "+" : "-"}`).join(" ") || "(none apply)",
       ]),
     );
   }
-  const done = rows.filter((r) => r.checks);
-  console.log(`\nTotals over ${done.length} drafts (${rows.length - done.length} failed to generate):`);
+
+  const done = rows.filter((r) => r.report);
+  log(`\nTotals over ${done.length} drafts (${rows.length - done.length} failed to generate):`);
   for (const name of CHECK_NAMES) {
-    const st = done.map((r) => r.checks!.find((c) => c.name === name)!.status);
-    const parts = (["pass", "warn", "fail", "n/a"] as const)
+    const st = done.map((r) => r.report!.checks.find((c) => c.name === name)!.status);
+    const parts = (["pass", "fail", "n/a"] as const)
       .map((s) => [s, st.filter((x) => x === s).length] as const)
       .filter(([, n]) => n > 0)
       .map(([s, n]) => `${n} ${MARK[s]}`);
-    console.log(`  ${name.padEnd(18)} ${parts.join(", ")}`);
+    log(`  ${name.padEnd(18)} ${parts.join(", ")}`);
+  }
+
+  // Per point: how often each applicable point was covered, by category.
+  const perPoint = new Map<string, { covered: number; total: number }>();
+  for (const r of done) {
+    for (const p of r.report!.points) {
+      const key = `${r.category} ${p.id}`;
+      const e = perPoint.get(key) ?? { covered: 0, total: 0 };
+      e.total += 1;
+      e.covered += p.covered ? 1 : 0;
+      perPoint.set(key, e);
+    }
+  }
+  log("\nRequired points covered (category point: covered/applicable):");
+  for (const [key, e] of [...perPoint.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    log(`  ${key.padEnd(40)} ${e.covered}/${e.total}`);
+  }
+  const words = done.map((r) => r.report!.words);
+  if (words.length) {
+    log(`\nBody words (information only): min ${Math.min(...words)}, max ${Math.max(...words)}, target in prompt ~100-180`);
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Run only when executed (npm run ai:eval), so tests can import printCheckTable without calling an API.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -1,14 +1,15 @@
 import { SIGN_OFF } from "./systemPrompt";
 import { isPaymentRelated, OFF_TOPIC_MONEY_RE } from "./relevance";
 import type { DraftContext } from "./types";
+import { checkRequiredPoints, type PointResult } from "./requiredPoints";
 
 /**
- * Deterministic checks on a generated draft. The drafter uses them to fix or
- * flag drafts (never to reject one for length); `npm run ai:eval` prints them
- * as a pass/fail table.
+ * Deterministic checks on a generated draft. The drafter uses some of them to fix
+ * or flag drafts (never to reject one for length); `npm run ai:eval` prints them
+ * as a pass/fail table. Word count is reported as information only.
  */
 
-/** Target body length in the prompt, and the wider band outside which we log a warning. */
+/** The prompt's target length, and the band outside which the drafter logs a warning. Never pass/fail. */
 export const TARGET_WORDS = { min: 100, max: 180 } as const;
 export const WARN_WORDS = { min: 80, max: 220 } as const;
 
@@ -69,40 +70,51 @@ export function findBadDates(draft: string): string[] {
   return [...new Set(bad)];
 }
 
-export type CheckStatus = "pass" | "warn" | "fail" | "n/a";
+export type CheckStatus = "pass" | "fail" | "n/a";
 
 export interface DraftCheck {
-  name: "length" | "bank once" | "no off-topic money" | "dates" | "numbers grounded";
+  name: "required points" | "bank once" | "no off-topic money" | "dates" | "numbers grounded";
   status: CheckStatus;
   detail: string;
 }
 
-export function checkDraft(draft: string, ctx: DraftContext, ungroundedNumbers: string[]): DraftCheck[] {
-  const words = bodyWordCount(draft);
-  const lengthStatus: CheckStatus =
-    words >= TARGET_WORDS.min && words <= TARGET_WORDS.max
-      ? "pass"
-      : words >= WARN_WORDS.min && words <= WARN_WORDS.max
-        ? "warn"
-        : "fail";
+export interface DraftCheckReport {
+  /** Information only: never a pass/fail criterion. */
+  words: number;
+  /** Per-point results for the ticket's category (see requiredPoints.ts). */
+  points: PointResult[];
+  checks: DraftCheck[];
+}
+
+export function checkDraft(draft: string, ctx: DraftContext, ungroundedNumbers: string[]): DraftCheckReport {
+  const points = checkRequiredPoints(draft, ctx);
+  const missing = points.filter((p) => !p.covered).map((p) => p.id);
   const bank = countBankRequests(draft);
   const payment = isPaymentRelated(ctx);
   const offTopic = payment ? null : (OFF_TOPIC_MONEY_RE.exec(draft)?.[0] ?? "");
   const badDates = findBadDates(draft);
 
-  return [
-    { name: "length", status: lengthStatus, detail: `${words} words` },
-    { name: "bank once", status: bank <= 1 ? "pass" : "fail", detail: `${bank} request${bank === 1 ? "" : "s"}` },
-    {
-      name: "no off-topic money",
-      status: offTopic === null ? "n/a" : offTopic ? "fail" : "pass",
-      detail: offTopic === null ? "payment ticket" : offTopic ? `mentions "${offTopic}"` : "none",
-    },
-    { name: "dates", status: badDates.length ? "fail" : "pass", detail: badDates.join(", ") || "ok" },
-    {
-      name: "numbers grounded",
-      status: ungroundedNumbers.length ? "fail" : "pass",
-      detail: ungroundedNumbers.join(", ") || "ok",
-    },
-  ];
+  return {
+    words: bodyWordCount(draft),
+    points,
+    checks: [
+      {
+        name: "required points",
+        status: points.length === 0 ? "n/a" : missing.length ? "fail" : "pass",
+        detail: missing.length ? `missing: ${missing.join(", ")}` : `${points.length}/${points.length}`,
+      },
+      { name: "bank once", status: bank <= 1 ? "pass" : "fail", detail: `${bank} request${bank === 1 ? "" : "s"}` },
+      {
+        name: "no off-topic money",
+        status: offTopic === null ? "n/a" : offTopic ? "fail" : "pass",
+        detail: offTopic === null ? "payment ticket" : offTopic ? `mentions "${offTopic}"` : "none",
+      },
+      { name: "dates", status: badDates.length ? "fail" : "pass", detail: badDates.join(", ") || "ok" },
+      {
+        name: "numbers grounded",
+        status: ungroundedNumbers.length ? "fail" : "pass",
+        detail: ungroundedNumbers.join(", ") || "ok",
+      },
+    ],
+  };
 }
