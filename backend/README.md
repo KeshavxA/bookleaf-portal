@@ -75,7 +75,7 @@ that the summary contains no key, secret or password values.
 | `ANTHROPIC_PRICE_INPUT_PER_MTOK` / `_OUTPUT_` | (built-in rate card) | USD per million tokens for `AiCall.estCost`. Set both or neither |
 | `GEMINI_PRICE_INPUT_PER_MTOK` / `_OUTPUT_` | `0` | Free-tier default. Set your paid rates on a billed project |
 | `AI_EVAL_DELAY_MS` | 4000 on Gemini, 0 on Anthropic | `ai:eval` only: pause between calls |
-| `LLM_TIMEOUT_MS` | `15000` | Per-attempt timeout |
+| `LLM_TIMEOUT_MS` | `15000` Anthropic, `30000` Gemini | Per-attempt timeout. Setting it overrides both defaults |
 | `LLM_MAX_RETRIES` | `2` | Retries on 429 / 5xx / connection reset |
 | `LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN_MS` | `5` / `30000` | Circuit breaker |
 | `RATE_LIMIT_LOGIN_MAX` / `_WINDOW_MS` | `10` / 15 min | Per IP+email |
@@ -365,6 +365,41 @@ Errors always use the shape `{ "error": { "code", "message", "details": [{ "fiel
 npm test
 ```
 
+### AI eval (`npm run ai:eval`)
+
+The eval runs 12 fixed tickets through the configured provider's real classifier and drafter. It prints each
+classification and draft, then a pass/fail table of automatic draft checks (`src/ai/drafter/checks.ts`):
+- **length:** body words, PASS 100–180, WARN 80–220, otherwise FAIL
+- **bank once:** bank details requested at most once
+- **no off-topic money:** no royalty, payout or bank text on tickets that aren't about payment
+- **dates:** dates in the house format, "14 Nov 2026"
+- **numbers grounded:** every number appears in the prompt sources
+
+Each table comes from **one run, not a scored eval**. The checks are mechanical and don't judge tone or correctness.
+
+Second Gemini run, 2026-10-21, `gemini-3.5-flash-lite`, free tier, 30 s timeout, after the draft quality pass
+(category-aware FACTS, a single bank-details request, a 100–180 word target):
+
+```
+#  | category                  | length    | bank once | no off-topic money | dates | numbers grounded
+1  | ROYALTY_PAYMENTS          | WARN 84   | PASS      | n/a                | PASS  | PASS
+2  | ROYALTY_PAYMENTS          | PASS 149  | PASS      | n/a                | PASS  | PASS
+3  | ISBN_METADATA             | WARN 81   | PASS      | PASS               | PASS  | PASS
+4  | PRINTING_QUALITY          | draft failed: TIMEOUT
+5  | DISTRIBUTION_AVAILABILITY | FAIL 69   | PASS      | PASS               | PASS  | PASS
+6  | BOOK_STATUS_PRODUCTION    | draft failed: TIMEOUT
+7  | DISTRIBUTION_AVAILABILITY | FAIL 79   | PASS      | PASS               | PASS  | PASS
+8  | ROYALTY_PAYMENTS          | draft failed: TIMEOUT
+9  | GENERAL_INQUIRY           | WARN 83   | PASS      | PASS               | PASS  | PASS
+10 | ROYALTY_PAYMENTS          | PASS 106  | PASS      | n/a                | PASS  | PASS
+11 | BOOK_STATUS_PRODUCTION    | PASS 122  | PASS      | PASS               | PASS  | PASS
+12 | ROYALTY_PAYMENTS          | WARN 89   | PASS      | n/a                | PASS  | PASS
+```
+
+Categories in this table are the ones the run actually used. #7 and #12 were misfiled by the keyword fallback after
+classification timeouts. 8 of 24 calls timed out, so only 9 of 12 drafts were produced. What it shows, and what it
+doesn't, is in [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md#gemini-eval-run-2-after-the-draft-quality-pass).
+
 - **Unit:** `nextPayoutDate` (year rollover, the boundary day, leap years), royalty assessment, classifier (valid, ISBN
   floor, invalid outputs → fallback, outage → fallback), LLM client (retry policy, no retry on 400/timeout, breaker
   opening and fail-fast, refusal, disabled mode, no sampling params sent, one `AiCall` per call), drafter (FACTS
@@ -469,7 +504,7 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 | Unit + integration tests (144) | ✅ verified | `npm test` against local PostgreSQL 14, Node 22. Both providers are covered with fake SDK transports |
 | Production build and start sequence | ✅ verified locally | `npm run build`, then `npm run start:prod` with `NODE_ENV=production` on a fresh empty database: both migrations applied, seed and 8 demo tickets created, `/health` ok, admin login and queue in urgency order. A second start created 0 demo tickets. The placeholder `JWT_SECRET` was refused, and the generated secret did not appear in the logs |
 | **Anthropic API** (classification, drafts, prompt caching, token and cost figures) | ❌ **not run against the real API** | No Anthropic key was available. The Anthropic path has only run against a fake SDK transport. The Haiku cost figures in this README are estimates |
-| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md` |
+| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval) |
 | Gemini rate-limit, quota-exhausted and invalid-key handling against the live API | ❌ not verified | Not triggered in the real run; covered only with a fake SDK |
 | Docker image build | ❌ not verified | Docker not installed; the `Dockerfile` has never been built |
 | Render deploy (`render.yaml`) | ❌ not verified | Blueprint not applied yet |
@@ -491,8 +526,10 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 - **Overdue detection is a heuristic.** The dataset has only cumulative royalty numbers, no per-quarter ledger. With a
   ledger, the payout-review flag could be exact.
 - **Bank status is unknown** for every seeded author (see `bankLinked`). Real data would come from the payments system.
-- **Gemini latency is uneven on the free tier.** Single calls took anywhere from about 1 s to 15 s, and one of 24 eval
-  calls hit the 15 s timeout. Consider `LLM_TIMEOUT_MS=30000` when running on a Gemini free-tier key.
+- **Gemini free-tier latency is unpredictable.** In the first eval run, 1 of 24 calls hit a 15 s timeout (average
+  3–5 s). In the second, 8 of 24 hit a 30 s timeout (average 12–15 s). The default is now 30 s for Gemini, but a slow
+  free-tier period still means keyword triage and `draft: null` for many tickets. A paid key or Anthropic is needed
+  for predictable latency.
 - **AI quality is checked by manual review** (`npm run ai:eval`), not by an automated graded eval. Next steps: add
   graded expectations (category accuracy, required phrases, banned claims) and run it in CI on prompt changes. Also
   track admin edit distance between draft and sent reply as a production quality signal.

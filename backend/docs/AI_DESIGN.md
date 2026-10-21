@@ -8,8 +8,9 @@ choosing to send it.
 
 > **Status (2026-10-21):** the **Anthropic path has not been run against the real API**; it has only been tested
 > with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had one manual
-> `npm run ai:eval` run** on `gemini-3.5-flash-lite` (free tier): category 12/12, priority 11/12, 23 of 24 calls
-> succeeded and 1 timed out. That's a single unscored run, not an eval; findings are under "Gemini eval run" below.
+> `npm run ai:eval` runs** on `gemini-3.5-flash-lite` (free tier). Run 1: category 12/12, priority 11/12, 1 of 24
+> calls timed out. Run 2, after the draft quality pass: 8 of 24 calls timed out at 30 s, so only 9 drafts came back.
+> Each is a single unscored run, not an eval. Findings are under "Gemini eval run 1" and "run 2" below.
 
 ## Prompt strategy
 
@@ -22,17 +23,31 @@ then applies one hard rule: ISBN tickets are never below HIGH. Haiku 5.5 rejects
 
 **Drafter:** the prompt runs from stable content to per-ticket content, so the stable part can be cached:
 
-1. Static instructions: BookLeaf's tone rules, grounding rules and format (120–200 words, plain text, fixed sign-off).
-   Cached; identical bytes for every draft.
+1. Static instructions: BookLeaf's tone rules, grounding rules and format (about 100–180 words, plain text, fixed
+   sign-off). Money rule: mention royalties, payouts or bank details only when FACTS contain royalty figures, and ask
+   for bank details at most once. Cached; identical bytes for every draft.
 2. The KB section for this ticket's category only, with its sample query as a few-shot example. Cached per category.
-3. `<facts>`, computed in code: first name, book status, royalty figures, the next payout date (quarter end + 45 days,
-   on or after today), whether the pending amount is under the ₹1,000 threshold, a payout-review flag, and whether
-   bank details are known.
-4. `<original_query>` and the last 6 messages in `<thread>`.
+3. `<facts>`, computed in code and **chosen by relevance**. Every ticket gets the first name, the ticket age, and the
+   book title and status. Category-specific facts:
+   - ISBN: the ISBN on record
+   - printing: the print partner
+   - distribution: the platforms
+   - production: the stage, e.g. "Cover Design"
+
+   Royalty figures, the next payout date (quarter end + 45 days, on or after today), the ₹1,000 roll-over, the
+   payout-review flag and bank status go in only when the ticket is about payment. That means the
+   `ROYALTY_PAYMENTS` category, or the author's own text mentions royalties, payouts, payment or bank. An amount on its
+   own, like an injected "₹50,000 bonus", doesn't count.
+4. `<focus>`: one or two lines computed in code. They say whether this is a payment ticket, and what to refer to.
+5. `<original_query>` and the last 6 messages in `<thread>`.
 
 The model doesn't do any arithmetic or date logic. If a fact isn't in the prompt, the instructions say to promise a
-48-hour follow-up instead of guessing. After generation, code strips markdown, enforces the sign-off, rejects drafts
-that were truncated or are under 40 words, and logs any number in the draft that doesn't appear in its sources.
+48-hour follow-up instead of guessing. After generation, code:
+- strips markdown and enforces the sign-off
+- keeps only the first sentence asking for bank details
+- rejects drafts that were truncated or are empty
+- logs a warning (never a rejection) if the body falls outside 80–220 words
+- logs any number in the draft that doesn't appear in its sources
 
 **Untrusted text:** the database stores subject, description, messages and notes raw. When they're copied into a
 prompt, `<` and `>` are replaced and each field is length-capped (`src/ai/promptText.ts`). That way author text can't
@@ -112,7 +127,7 @@ data needs a paid project or Anthropic**. Model ids change often, so `LLM_MODEL`
 3.5 model, it has a free tier, and it supports `minimal` thinking. `gemini-3.8-flash` can't go below `low` and costs
 more ($0.75 / $3.75 vs $0.30 / $2.50 per MTok paid, through 2026). `estCost` defaults to 0 for Gemini (free tier); `GEMINI_PRICE_*` sets the paid rates.
 
-### Gemini eval run (2026-10-21, `gemini-3.5-flash-lite`, free tier)
+### Gemini eval run 1 (2026-10-21, `gemini-3.5-flash-lite`, free tier)
 
 Overall: 12 tickets, 24 calls. Average latency was 3.1 s per classification and 5.0 s per draft. Tokens totalled
 23,321 in and 2,358 out (thinking included), roughly 1,950 in and 200 out per ticket. At the paid list price
@@ -128,7 +143,8 @@ What worked:
 - The grounding tripwire flagged no numbers.
 
 What a reviewer would change:
-- Five drafts were shorter than the requested 120 words (88–111). Code only rejects drafts under 40 words.
+- Five drafts were shorter than the then-requested 120 words (88–111, counting greeting and sign-off). Code then
+  rejected only drafts under 40 words.
 - On a description-update question (GENERAL_INQUIRY), the draft brought up royalties and bank details nobody asked
   about, because FACTS include royalty lines for general tickets. Royalty facts should be added only when the query
   mentions money.
@@ -139,6 +155,58 @@ What a reviewer would change:
   only because every draft is reviewed before sending.
 - The one timeout was the first call of the run, and single calls took anywhere from about 1 s to 15 s. On the free
   tier, a 30 s timeout is safer.
+
+### Gemini eval run 2 (after the draft quality pass)
+
+This run came after the changes from run 1: category-aware FACTS, a per-ticket focus note, a single bank-details
+request, a 100–180 word target, and FACTS dates formatted without locale data. Settings: 2026-10-21, same model, free
+tier, 30 s timeout, 4 s pause between calls. The full table is in the README's [AI eval](../README.md#ai-eval-npm-run-aieval)
+section.
+
+**The run was dominated by timeouts.** 8 of 24 calls hit the 30 s limit: 5 classifications and 3 drafts. Average
+latency was 11.6 s to classify and 15.1 s to draft, against 3.1 s and 5.0 s in run 1. The classifier prompt didn't
+change between the runs, so the slowdown was on Google's side. The consequences:
+- category 10/12 and priority 8/12, against 12/12 and 11/12 before
+- only 9 of 12 drafts produced
+
+Two tickets were misfiled by the keyword fallback:
+- **#7**, the description question, was filed as DISTRIBUTION_AVAILABILITY. Its draft used the distribution KB, so
+  this run did **not** test the general-inquiry answer ("dashboard or email, 3–5 business days").
+- **#12**, the injection ticket, was filed as ROYALTY_PAYMENTS. Its draft then talked about royalties the author never
+  asked about and asked for bank details. That's a fallback weakness: one wrong keyword category turns into a wrong
+  draft. It's not the injection working, since the draft promised no bonus.
+
+On the 9 drafts that were produced, checked the same way as run 1's 12 (applied afterwards to its saved output):
+
+| Check | Run 1 (12 drafts) | Run 2 (9 drafts) |
+|---|---|---|
+| bank details asked at most once | 10 pass, 2 fail | 9 pass |
+| no royalty/payout/bank text on non-payment tickets | 5 pass, 3 fail | 5 pass |
+| house date format | 11 pass, 1 fail ("1 Sept 2025") | 9 pass |
+| numbers grounded | 12 pass | 9 pass |
+| length, PASS 100–180 / WARN 80–220 / FAIL | 9 / 3 / 0 | 3 / 4 / 2 |
+
+What improved, in this run:
+- No draft asked for bank details twice.
+- No non-payment draft mentioned royalties, payouts or bank details. In run 1, three did: the description-update reply
+  (FACTS royalty lines), and both production tickets. Those two were echoing our own FACTS line "not yet published, so
+  there are no sales or royalties yet". That line is still in FACTS. In this run, #11 avoided the word and #6 produced
+  no draft, so it isn't shown to be fixed.
+- All dates were in the house format.
+- #9 (author bio, GENERAL_INQUIRY) answered with the dashboard route and "3-5 business days", with no account or money
+  details.
+
+What did not improve:
+- **Length got worse.** Only 3 of 9 drafts are in the 100–180 target, and two are under 80 (69 and 79 words). With
+  less material in FACTS, the model writes less, and the prompt's "about 100 to 180 words" isn't enough on its own to
+  hold it. A fix would be a one-line "short answer is fine, but cover: …" checklist per category in the focus note, or
+  a regenerate when the draft is under 80 words.
+- Reliability, which this pass didn't target, was much worse because of the timeouts.
+- #10 got HIGH from the model where MEDIUM was expected: classification variance, with no classifier change.
+
+Untested in this run: #4 (printing), #6 (typesetting) and #8 (the legal threat) produced no draft, so the new facts for
+those categories weren't exercised against the model. Two runs, one of them half-degraded, say very little about
+quality. A scored eval over many runs is still the missing piece.
 
 ## Why Haiku
 
