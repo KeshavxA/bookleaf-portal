@@ -117,6 +117,18 @@ export class TicketRepository {
     return this.db.ticket.update({ where: { id }, data: patch });
   }
 
+  /**
+   * Atomically moves a ticket to aiStatus PENDING unless it already is.
+   * Returns false when a classification is already queued or running.
+   */
+  async markClassificationPending(id: string): Promise<boolean> {
+    const { count } = await this.db.ticket.updateMany({
+      where: { id, aiStatus: { not: "PENDING" } },
+      data: { aiStatus: "PENDING", aiError: null },
+    });
+    return count === 1;
+  }
+
   addMessage(data: { ticketId: string; senderType: "AUTHOR" | "ADMIN"; senderUserId: string; body: string }) {
     return this.db.ticketMessage.create({ data, include: { sender: { select: { name: true } } } });
   }

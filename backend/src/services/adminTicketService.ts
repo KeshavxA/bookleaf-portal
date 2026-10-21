@@ -95,10 +95,12 @@ export class AdminTicketService {
     return this.users.listAdmins();
   }
 
-  /** Admin retry after an AI failure (or to re-run after editing context). */
+  /**
+   * Admin retry after an AI failure (or to re-run after editing context).
+   * Already PENDING: returns the ticket as-is without starting a second job.
+   */
   async reclassify(ticketId: string) {
-    await this.triage.markForReclassification(ticketId);
-    this.queue.enqueue(ticketId);
+    if (await this.triage.markForReclassification(ticketId)) this.queue.enqueue(ticketId);
     return this.get(ticketId);
   }
 

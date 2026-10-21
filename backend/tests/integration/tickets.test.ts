@@ -161,6 +161,11 @@ describe("ticket lifecycle with a working LLM", () => {
 
     const queue = await request(app).get("/api/v1/admin/tickets").set(auth(admin));
     expect(queue.body).toMatchObject({ page: 1, pageSize: 20, total: 2 });
+
+    const unassigned = await request(app).patch(`/api/v1/admin/tickets/${ticketId}`).set(auth(admin)).send({ assigneeId: null });
+    expect(unassigned.body.assignee).toBeNull();
+    const mineAfter = await request(app).get("/api/v1/admin/tickets?assigneeId=me").set(auth(admin));
+    expect(mineAfter.body.total).toBe(0);
   });
 
   it("refuses author messages on closed tickets", async () => {
@@ -168,6 +173,52 @@ describe("ticket lifecycle with a working LLM", () => {
     const res = await request(app).post(`/api/v1/tickets/${ticketId}/messages`).set(auth(priya)).send({ body: "hello?" });
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("CONFLICT");
+  });
+});
+
+describe("POST /admin/tickets/:id/classify while classification is PENDING", () => {
+  let classifyCalls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const sdk = async () => {
+    classifyCalls++;
+    await gate; // hold the first classification in flight
+    return fakeMessage(JSON.stringify({ category: "ISBN_METADATA", priority: "HIGH", reasoning: "ISBN mismatch" }));
+  };
+  const { app, container } = buildTestApp(llmWithFakeSdk(sdk));
+
+  it("returns 202 with the current ticket and does not start a second job", async () => {
+    const [priya, admin] = await Promise.all([login(app, PRIYA), login(app, ADMIN)]);
+    await resetTickets();
+    const created = await request(app)
+      .post("/api/v1/tickets")
+      .set(auth(priya))
+      .send({ bookId: "BK001", subject: "ISBN wrong", description: "The ISBN on Amazon differs from my printed copy." });
+    const id = created.body.id as string;
+    while (classifyCalls === 0) await new Promise((r) => setTimeout(r, 5));
+
+    const events: string[] = [];
+    const unsubscribe = container.bus.subscribe((e) => e.ticketId === id && events.push(e.type));
+    for (let i = 0; i < 2; i++) {
+      const res = await request(app).post(`/api/v1/admin/tickets/${id}/classify`).set(auth(admin));
+      expect(res.status).toBe(202);
+      expect(res.body).toMatchObject({ id, aiStatus: "PENDING" });
+    }
+    expect(events).toEqual([]); // nothing changed, so nothing was published
+
+    release();
+    await container.queue.onIdle();
+    unsubscribe();
+    expect(classifyCalls).toBe(1);
+    expect(await prisma.aiCall.count({ where: { ticketId: id, kind: "CLASSIFY" } })).toBe(1);
+
+    // Once DONE, a retry runs again.
+    const retry = await request(app).post(`/api/v1/admin/tickets/${id}/classify`).set(auth(admin));
+    expect(retry.body.aiStatus).toBe("PENDING");
+    await container.queue.onIdle();
+    expect(classifyCalls).toBe(2);
+    const done = await request(app).get(`/api/v1/admin/tickets/${id}`).set(auth(admin));
+    expect(done.body.aiStatus).toBe("DONE");
   });
 });
 

@@ -48,6 +48,42 @@ The backend always returns `details: { field: string, message: string }[]`. `fie
 
 ---
 
+# Clarifications from backend pass 2 (contract v1.1)
+
+These describe how the backend already behaves where v1.1 is silent. None of them change a shape, and each one is
+covered by a test.
+
+## C1. The draft cache is also cleared when an admin replies
+v1.1 lists two triggers: a category change and a new author message. `POST /admin/tickets/:id/reply` clears it too,
+because the draft was either sent or replaced by what the admin wrote. The next `POST /draft` generates a fresh one.
+
+## C2. `PATCH /admin/tickets/:id { "assigneeId": null }` unassigns
+`null` clears the assignee. Omitting the key leaves it unchanged. A non-null value must be an admin's user id,
+otherwise `400 VALIDATION_ERROR` with `field: "assigneeId"`.
+
+## C3. Bare `from`/`to` dates are UTC
+`from=2026-10-21` means `2026-10-21T00:00:00.000Z`, and `to=2026-10-21` means through `2026-10-21T23:59:59.999Z`.
+For IST (UTC+5:30) users, a day filter is therefore off by 5.5 hours at each edge. Clients that need local days should
+send full ISO timestamps with an offset, which the backend accepts as given. The `+` must be URL-encoded
+(`from=2026-10-21T00:00:00%2B05:30`). An unencoded `+` decodes to a space, and the backend rejects that with
+`400 VALIDATION_ERROR`.
+
+## C4. Message length cap
+`POST /tickets/:id/messages`, `POST /admin/tickets/:id/reply` and `POST /admin/tickets/:id/notes` accept a `body`
+of 1 to 5000 characters after trimming, the same cap as a ticket `description`. Over the limit returns
+`400 VALIDATION_ERROR` with `field: "body"`.
+
+## C5. `POST /admin/tickets/:id/classify` on a ticket that is already `PENDING`
+Returns `202` with the current ticket and starts no second job. No event fires, because nothing changed.
+`ticket.ai_ready` arrives when the job that's already running finishes. The check-and-set is a single conditional
+update, so two concurrent clicks can't both start a job.
+
+## C6. `page` and `pageSize` are validated, not clamped
+`page` must be an integer ≥ 1 and `pageSize` an integer from 1 to 100. Anything else returns `400 VALIDATION_ERROR`
+with the field name, and is never silently corrected.
+
+---
+
 # Proposals from the frontend
 
 The frontend implements v1 as written and was smoke-tested against the backend. Nothing below blocks it.

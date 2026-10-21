@@ -59,11 +59,16 @@ export class TriageService {
     this.bus.publish({ type: "ticket.ai_ready", ticketId, authorId: updated.authorId });
   }
 
-  /** Admin "retry AI": mark PENDING and hand back to the queue. */
-  async markForReclassification(ticketId: string): Promise<void> {
+  /**
+   * Admin "retry AI": mark PENDING so the caller can hand it to the queue.
+   * Returns false (and changes nothing) if the ticket is already PENDING, so a
+   * double click or a retry during the initial run never starts a second job.
+   */
+  async markForReclassification(ticketId: string): Promise<boolean> {
     const t = await this.tickets.findById(ticketId);
     if (!t) throw new NotFoundError("Ticket");
-    await this.tickets.update(ticketId, { aiStatus: "PENDING", aiError: null });
+    if (!(await this.tickets.markClassificationPending(ticketId))) return false;
     this.bus.publish({ type: "ticket.updated", ticketId, authorId: t.authorId, adminOnly: true });
+    return true;
   }
 }

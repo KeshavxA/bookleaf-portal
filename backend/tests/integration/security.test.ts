@@ -192,10 +192,16 @@ describe("AuthorTicket never leaks admin fields", () => {
   });
 
   it("the author still sees admin replies", async () => {
+    const draft = await request(app).post(`/api/v1/admin/tickets/${priyaTicketId}/draft`).set(auth(admin)).send({});
+    expect(draft.body.draft).not.toBeNull();
     await request(app).post(`/api/v1/admin/tickets/${priyaTicketId}/reply`).set(auth(admin)).send({ body: "We are on it." });
     const res = await request(app).get(`/api/v1/tickets/${priyaTicketId}`).set(auth(priya));
     expectClean("GET /tickets/:id after reply", res.body);
     expect(res.body.messages.at(-1)).toMatchObject({ senderType: "ADMIN", body: "We are on it." });
+
+    // the reply consumed the cached draft (contract clarification C1)
+    const adminView = await request(app).get(`/api/v1/admin/tickets/${priyaTicketId}`).set(auth(admin));
+    expect(adminView.body.draft).toBeNull();
   });
 });
 
