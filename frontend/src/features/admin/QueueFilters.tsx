@@ -5,13 +5,14 @@ import { Field, Input, Select } from '@/components/Field';
 import { MultiSelect } from '@/components/MultiSelect';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { CATEGORY_LABEL, PRIORITY_LABEL, STATUS_LABEL } from '@/lib/labels';
-import type { AssigneeChoice, QueueFilters as Filters } from './queueParams';
+import { SORT_OPTIONS, type AssigneeChoice, type QueueFilters as Filters } from './queueParams';
 
 interface Props {
   filters: Filters;
   onChange: (patch: Partial<Filters>) => void;
   onClear: () => void;
-  active: boolean;
+  /** True when anything (filters or sort) differs from the default view. */
+  customized: boolean;
 }
 
 const options = <T extends string>(values: readonly T[], labels: Record<T, string>) =>
@@ -21,7 +22,7 @@ const STATUS_OPTIONS = options(TICKET_STATUSES, STATUS_LABEL);
 const CATEGORY_OPTIONS = options(CATEGORIES, CATEGORY_LABEL);
 const PRIORITY_OPTIONS = options(PRIORITIES, PRIORITY_LABEL);
 
-export function QueueFilters({ filters, onChange, onClear, active }: Props) {
+export function QueueFilters({ filters, onChange, onClear, customized }: Props) {
   // Search is typed locally and pushed to the URL after a pause, so each keystroke isn't a request.
   const [search, setSearch] = useState(filters.q);
   const debounced = useDebouncedValue(search, 350);
@@ -60,13 +61,15 @@ export function QueueFilters({ filters, onChange, onClear, active }: Props) {
         <Field label="Sort" className="w-48">
           {(p) => (
             <Select {...p} value={filters.sort} onChange={(e) => onChange({ sort: e.target.value as QueueSort })}>
-              <option value="urgency">Most urgent</option>
-              <option value="oldest">Oldest first</option>
-              <option value="newest">Newest first</option>
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </Select>
           )}
         </Field>
-        {active && (
+        {customized && (
           <Button variant="ghost" size="sm" onClick={onClear}>
             Clear filters
           </Button>

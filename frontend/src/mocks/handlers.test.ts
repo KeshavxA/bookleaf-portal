@@ -52,6 +52,25 @@ describe('mock API: contract v1.1', () => {
     expect(toToday.data.total).toBe(all.data.total); // a bare "to" covers the whole (UTC) day
   });
 
+  it('orders by urgency by default, like the backend: unresolved first, priority weight, then oldest', async () => {
+    const WEIGHT: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+    type Item = { priority: string; status: string; createdAt: string };
+    const isOpen = (t: Item) => t.status === 'OPEN' || t.status === 'IN_PROGRESS';
+
+    for (const query of ['?pageSize=100', '?sort=urgency&page=1&pageSize=100']) {
+      const items: Item[] = (await call(`/admin/tickets${query}`, ADMIN)).data.items;
+      const firstResolved = items.findIndex((t) => !isOpen(t));
+      expect(items.slice(firstResolved).every((t) => !isOpen(t))).toBe(true); // resolved/closed last
+      const open = items.slice(0, firstResolved);
+      for (let i = 1; i < open.length; i++) {
+        const [a, b] = [open[i - 1], open[i]];
+        const byWeight = WEIGHT[a.priority] - WEIGHT[b.priority];
+        expect(byWeight < 0 || (byWeight === 0 && a.createdAt <= b.createdAt)).toBe(true);
+      }
+      expect(open[0].priority).toBe('CRITICAL');
+    }
+  });
+
   it('PATCH: same value is a no-op; a category change sets the flag and clears the cached draft', async () => {
     // t-1006: Vikram's MEDIUM ticket whose priority matches the AI suggestion.
     const draft = await call('/admin/tickets/t-1006/draft', ADMIN, { method: 'POST', body: {} });

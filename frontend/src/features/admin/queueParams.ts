@@ -13,6 +13,14 @@ import {
 
 export const PAGE_SIZE = 20;
 
+/** Contract default: priority weight first, then oldest first among unresolved. */
+export const DEFAULT_SORT: QueueSort = 'urgency';
+export const SORT_OPTIONS: readonly { value: QueueSort; label: string }[] = [
+  { value: 'urgency', label: 'Urgency' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'newest', label: 'Newest' },
+];
+
 export type AssigneeChoice = '' | 'me' | 'unassigned';
 
 /** Filter state as it lives in the URL, so filtered views survive reloads and can be shared. */
@@ -34,7 +42,7 @@ const list = <T extends string>(value: string | null, allowed: readonly T[]): T[
   return allowed.filter((v) => picked.has(v));
 };
 
-const SORTS: readonly QueueSort[] = ['urgency', 'oldest', 'newest'];
+const SORTS = SORT_OPTIONS.map((o) => o.value);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseFilters(params: URLSearchParams): QueueFilters {
@@ -50,7 +58,8 @@ export function parseFilters(params: URLSearchParams): QueueFilters {
     to: DATE.test(to) ? to : '',
     assignee: assignee === 'me' || assignee === 'unassigned' ? assignee : '',
     q: params.get('q') ?? '',
-    sort: sort && SORTS.includes(sort) ? sort : 'urgency',
+    // Missing or unknown values fall back to the contract default.
+    sort: sort && SORTS.includes(sort) ? sort : DEFAULT_SORT,
     page: Math.max(1, Number(params.get('page')) || 1),
   };
 }
@@ -68,7 +77,7 @@ export function toApiQuery(f: QueueFilters): AdminTicketQuery {
     from: f.from || undefined,
     to: f.to || undefined,
     q: f.q.trim() || undefined,
-    sort: f.sort,
+    sort: f.sort, // always sent explicitly, so the request never depends on a server default
     page: f.page,
     pageSize: PAGE_SIZE,
   };
@@ -83,7 +92,7 @@ export function serializeFilters(f: QueueFilters): URLSearchParams {
   if (f.to) out.set('to', f.to);
   if (f.assignee) out.set('assignee', f.assignee);
   if (f.q) out.set('q', f.q);
-  if (f.sort !== 'urgency') out.set('sort', f.sort);
+  if (f.sort !== DEFAULT_SORT) out.set('sort', f.sort);
   if (f.page > 1) out.set('page', String(f.page));
   return out;
 }
@@ -107,7 +116,9 @@ export function useQueueFilters() {
     [setParams],
   );
 
+  // Resets filters, page and sort, so the queue returns to urgency order.
   const clear = useCallback(() => setParams(new URLSearchParams(), { replace: true }), [setParams]);
+  /** Any filter set (drives the "no matches" empty state). */
   const active = Boolean(
     filters.status.length ||
       filters.category.length ||
@@ -118,5 +129,11 @@ export function useQueueFilters() {
       filters.q,
   );
 
-  return { filters, update, clear, active };
+  /**
+   * Anything differing from the default view, including a non-default sort. This drives the
+   * "Clear filters" button, so a stale ?sort=newest (from a bookmark or the back link) can be reset.
+   */
+  const customized = active || filters.sort !== DEFAULT_SORT;
+
+  return { filters, update, clear, active, customized };
 }

@@ -10,7 +10,7 @@ import { PAGE_SIZE, toApiQuery, useQueueFilters } from './queueParams';
 import { QueueTable, STALE_DAYS } from './QueueTable';
 
 export function QueuePage() {
-  const { filters, update, clear, active } = useQueueFilters();
+  const { filters, update, clear, active, customized } = useQueueFilters();
   const { data, isPending, isError, error, refetch, isFetching, isPlaceholderData } = useAdminTickets(
     toApiQuery(filters),
   );
@@ -31,7 +31,7 @@ export function QueuePage() {
           </span>
         }
       />
-      <QueueFilters filters={filters} onChange={update} onClear={clear} active={active} />
+      <QueueFilters filters={filters} onChange={update} onClear={clear} customized={customized} />
       <Legend />
 
       {isPending ? (
