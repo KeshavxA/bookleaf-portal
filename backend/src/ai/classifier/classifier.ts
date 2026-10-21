@@ -34,7 +34,8 @@ export class TicketClassifier {
         {
           kind: "CLASSIFY",
           ticketId,
-          system: [{ type: "text", text: CLASSIFIER_SYSTEM_PROMPT }],
+          // Identical on every call and above the 512-token cache minimum: cached reads are 10% of input price.
+          system: [{ type: "text", text: CLASSIFIER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
           messages: buildClassifierMessages(input),
           maxTokens: CLASSIFIER_MAX_TOKENS,
           effort: "low",
