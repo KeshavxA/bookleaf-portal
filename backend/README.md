@@ -234,7 +234,7 @@ Approximate sizes, measured as characters/3.5 (run `npm run ai:eval` for exact u
 | Classify | ~620 system (cached) + ~150 ticket | ~40 | ~$0.0001 |
 | Draft | ~900 system + ~350–560 KB (both cached) + ~300–700 facts/thread | ~300 | ~$0.0003 |
 
-That's roughly **$0.0005 per ticket** including one draft, or about $5 per 10,000 tickets. For comparison, sending the
+That's roughly **$0.0003–0.0005 per ticket** including one draft (estimated; cold vs cached prefix, see [`docs/AI_DESIGN.md`](docs/AI_DESIGN.md)), or $3–5 per 10,000 tickets. For comparison, sending the
 full KB (~2.7k tokens) and the full dataset (~3.8k tokens) on every call would put 3–5× more input tokens in each
 request, and the share of irrelevant material would grow with the catalogue. Cache reads bill at 10% of the input
 price, and Haiku 5.5's 512-token cache minimum is exceeded by both static prefixes. Other controls:
