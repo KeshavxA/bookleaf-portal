@@ -1,7 +1,7 @@
 # BookLeaf Author Support Portal: Backend
 
 REST API for the author portal and the admin support desk. Express + TypeScript + PostgreSQL (Prisma), with
-AI triage and reply drafting on Anthropic's Claude Haiku.
+AI triage and reply drafting on Anthropic's Claude Haiku (default) or Google Gemini, selected with `LLM_PROVIDER`.
 
 - **API contract (source of truth):** [`../docs/API_CONTRACT.md`](../docs/API_CONTRACT.md). Proposed changes are in [`../docs/CONTRACT_CHANGES.md`](../docs/CONTRACT_CHANGES.md).
 - **Interactive docs:** `GET /api/docs` (Swagger UI); raw spec at `GET /api/docs/openapi.json`
@@ -14,7 +14,7 @@ Prerequisites: Node 20+, PostgreSQL 14+.
 
 ```bash
 cd backend
-cp .env.example .env            # then set DATABASE_URL and (optionally) ANTHROPIC_API_KEY
+cp .env.example .env            # then set DATABASE_URL and (optionally) an AI provider and key
 npm install
 npx prisma migrate deploy       # create the schema
 npm run db:seed                 # 10 authors, 18 books, 2 admins (idempotent)
@@ -22,7 +22,7 @@ npm run seed:demo               # optional: 8 pre-classified demo tickets (idemp
 npm run dev                     # http://localhost:4000
 ```
 
-With no `ANTHROPIC_API_KEY` the app still runs fully: tickets get keyword triage (`aiStatus: FAILED`), and the
+Without a key for the selected provider the app still runs fully: tickets get keyword triage (`aiStatus: FAILED`), and the
 draft endpoint returns `draft: null` with an error so admins write replies by hand. That's the degraded mode
 the brief asks for, and it's the same path that runs when the AI provider is down.
 
@@ -48,7 +48,7 @@ the brief asks for, and it's the same path that runs when the AI provider is dow
 | `npm run seed:demo` | 8 demo tickets with preset category/priority and `aiStatus: DONE`, built from real dataset rows. Idempotent (skips a ticket if that author already has one with the same subject). Makes no LLM calls |
 | `npm run db:clear-tickets` | Deletes tickets, messages, internal notes and `AiCall` rows only (users, authors, books stay). Refuses when `NODE_ENV=production` unless run with `-- --force` |
 | `npm test` | Unit + integration tests (see [Testing](#testing)) |
-| `npm run ai:eval` | Runs 12 sample tickets through the real classifier + drafter and prints the results for review (`-- --no-draft`, `-- --only=3`) |
+| `npm run ai:eval` | Runs 12 sample tickets through the configured provider's real classifier + drafter and prints the results for review (`-- --no-draft`, `-- --only=3`, `-- --delay-ms=4000`). Prints provider and model, reports a rate-limited ticket and carries on, and pauses between calls (default 4 s on Gemini) |
 | `npm run typecheck` | `tsc --noEmit` |
 
 ### Environment variables
@@ -68,8 +68,13 @@ that the summary contains no key, secret or password values.
 | `PORT` | `4000` | |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed browser origins |
 | `LOG_LEVEL` | `info` | pino level |
-| `ANTHROPIC_API_KEY` | (empty) | Server-side only. Never logged, returned, or sent to the frontend. Empty does **not** stop startup: the server logs one warning and runs in degraded mode |
-| `LLM_MODEL` | `claude-haiku-5-5` | Model for classification and drafting |
+| `LLM_PROVIDER` | `anthropic` | `anthropic` or `gemini`. See [Switching the LLM provider](#switching-the-llm-provider) |
+| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | (empty) | Server-side only. Never logged, returned, or sent to the frontend. Only the selected provider's key is read. Empty does **not** stop startup: the server logs one warning and runs in degraded mode |
+| `LLM_MODEL` | `claude-haiku-5-5` for Anthropic; **required** for Gemini | Model for classification and drafting. No Gemini default on purpose: Google's model ids change often |
+| `GEMINI_CLASSIFIER_THINKING` | `minimal` | Classifier thinking on Gemini: `minimal`, `low`, `medium`, `high`, or `off` (thinkingBudget 0; 2.5-family models only). A level the model rejects shows up as a `BAD_REQUEST` naming this variable |
+| `ANTHROPIC_PRICE_INPUT_PER_MTOK` / `_OUTPUT_` | (built-in rate card) | USD per million tokens for `AiCall.estCost`. Set both or neither |
+| `GEMINI_PRICE_INPUT_PER_MTOK` / `_OUTPUT_` | `0` | Free-tier default. Set your paid rates on a billed project |
+| `AI_EVAL_DELAY_MS` | 4000 on Gemini, 0 on Anthropic | `ai:eval` only: pause between calls |
 | `LLM_TIMEOUT_MS` | `15000` | Per-attempt timeout |
 | `LLM_MAX_RETRIES` | `2` | Retries on 429 / 5xx / connection reset |
 | `LLM_BREAKER_THRESHOLD` / `LLM_BREAKER_COOLDOWN_MS` | `5` / `30000` | Circuit breaker |
@@ -93,7 +98,7 @@ src/
   realtime/       EventBus (in-process pub/sub) + SseHub (role-scoped fan-out, heartbeat, cleanup)
   jobs/           ClassificationQueue (in-process, bounded concurrency, restart recovery)
   domain/         pure logic: enums, payout schedule (nextPayoutDate, threshold, review flag)
-  ai/             everything LLM: client wrapper, classifier, drafter, per-category KB
+  ai/             everything LLM: provider-agnostic client, Anthropic/Gemini providers, classifier, drafter, KB
   container.ts    composition root: the only file that wires concrete classes together
 ```
 
@@ -150,11 +155,19 @@ Admin opens ticket ──► POST /draft ──► cached? return it
                                            fail → 200 { draft: null, error }  (admin writes manually)
 ```
 
-### 1. LLM client (`src/ai/llm/client.ts`)
+### 1. LLM client (`src/ai/llm/client.ts`) and providers (`src/ai/llm/providers/`)
 
-- The Anthropic SDK with **SDK-level retries turned off**, so retry policy lives in one place and can be tested.
+- **One provider interface** (`LlmProvider`): system blocks, chat messages, max output tokens, an optional JSON
+  schema, a timeout, and a result with text, normalised stop reason and token usage. `AnthropicProvider` and
+  `GeminiProvider` implement it, and each one maps its own SDK's errors and estimates its own cost. `LlmClient`
+  wraps whichever provider `LLM_PROVIDER` selects, so the classifier and drafter don't know which one is running.
+- Both SDKs run with **retries turned off**, so retry policy lives in one place and can be tested.
 - **15 s per-attempt timeout.** **2 retries** with exponential backoff and jitter on 429, 5xx and connection resets.
-  `retry-after` is honoured (capped at 4 s). Timeouts and 4xx are not retried.
+  A server-requested delay (Anthropic `retry-after`, capped at 4 s; Gemini `RetryInfo`) is honoured only if it fits
+  in the 15 s wait budget. Timeouts and 4xx are not retried.
+- **Quota handling:** an exhausted quota (Gemini per-day limit, or `limit: 0` for a model with no free-tier quota),
+  or a 429 asking for a longer wait than the budget, **opens the circuit breaker immediately**. The app stops calling
+  the API and degrades (keyword triage, `draft: null` with an error) until the breaker's cooldown ends.
 - **Circuit breaker** shared by all calls: 5 consecutive upstream failures open it for 30 s, then one probe call is
   allowed. While it's open, calls fail in microseconds instead of every new ticket waiting through timeouts.
 - **Every call is logged to `AiCall`**, including failures, breaker rejections and "AI disabled". Each row has token
@@ -162,7 +175,8 @@ Admin opens ticket ──► POST /draft ──► cached? return it
   can't break a request.
 - `stop_reason: "refusal"` and `max_tokens` truncation are handled explicitly. A parser hook lets callers reject a
   response as `INVALID_OUTPUT` (recorded, not retried, doesn't trip the breaker).
-- The key is read from `ANTHROPIC_API_KEY` only, passed to the SDK constructor, and never logged. pino also redacts
+- Keys are read from `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` only, passed to the SDK constructor, and never logged
+  (the Gemini provider also scrubs its key from any error text). pino also redacts
   auth headers and key-like fields as a second safeguard.
 
 ### 2. Classifier (`src/ai/classifier/`)
@@ -268,6 +282,46 @@ Admins can always reply by hand, and an AI outage never prevents an author from 
 - **Easy to upgrade.** If evals showed drafts needed more nuance, `LLM_MODEL=claude-sonnet-5-5` switches the model with
   no code changes, and the pricing table already includes it.
 
+### Switching the LLM provider
+
+Set three variables in `backend/.env` (or on the host) and restart:
+
+```bash
+LLM_PROVIDER=gemini                 # or anthropic (default)
+LLM_MODEL=gemini-3.5-flash-lite     # required for gemini; anthropic defaults to claude-haiku-5-5
+GEMINI_API_KEY=...                  # or ANTHROPIC_API_KEY for anthropic
+```
+
+The startup log shows `provider`, `model` and whether the key is `set`/`not set`, never the value. `/health` reports
+`ai: enabled|disabled`. `npm run ai:eval` runs the same 12 tickets against whichever provider is selected.
+
+**Why two providers.** The Gemini free tier lets anyone run the app and the eval with real model output at no cost.
+Having two providers also showed which parts of the design were really Anthropic-specific: explicit
+`cache_control`, `output_config`, and the retry-after semantics. Those now sit behind one interface, and an outage or
+quota problem with one vendor is an env change, not a code change. Anthropic stays the default because the prompts
+and the cost model were designed around Claude Haiku.
+
+**How Gemini differs:**
+- Structured output uses `responseMimeType: application/json` plus a `responseSchema` converted from the same JSON
+  schema. The category and priority enums are kept, and zod validation plus the keyword fallback still apply.
+- No `cache_control`. The prompt still puts static content first, so Gemini's implicit caching *might* apply, but
+  nothing relies on it. `AiCall.cacheReadTokens` shows what the API actually reports.
+- Classifier thinking is set with `GEMINI_CLASSIFIER_THINKING` (default `minimal`). If a model rejects the level,
+  the classification fails visibly with an error naming that variable; it is never dropped silently.
+- `max_output_tokens` counts thinking tokens on Gemini, so thinking tokens are logged as output.
+
+**Free-tier caveats (Gemini):**
+- **Quotas are tight and change without notice.** Per-minute and per-day limits differ per model. When a quota runs
+  out, the breaker opens and the app runs in degraded mode. `ai:eval` paces its calls (4 s by default).
+- **Google may use free-tier inputs and outputs to improve its products** (the pricing page lists this as "Yes" for
+  the free tier and "No" for paid). That's fine for the fake sample data in this repo, but **real author data must
+  not go through a free-tier key.** Use a billed project, or Anthropic.
+- **Model ids change often** (Google's models page lists several earlier ids as already shut down), so `LLM_MODEL` is configuration with no default.
+  `gemini-3.5-flash-lite` was chosen on 2026-10-21 from https://ai.google.dev/gemini-api/docs/models: it's listed as
+  stable and as the fastest, cheapest 3.5 model, it has a free tier, and it supports `minimal` thinking.
+- `estCost` is 0 by default for Gemini. Set `GEMINI_PRICE_*` on a billed project (paid list price for
+  `gemini-3.5-flash-lite` on 2026-10-21: $0.30 in / $2.50 out per MTok).
+
 ---
 
 ## Realtime
@@ -365,7 +419,9 @@ demo tickets once. They have preset triage, so the queue looks right even withou
 | `JWT_SECRET` | yes | ≥32 random chars, e.g. `openssl rand -base64 48`. The server won't start without it |
 | `CORS_ORIGINS` | yes, for a browser frontend | the frontend origin(s), comma-separated, e.g. `https://bookleaf-portal.vercel.app` |
 | `SEED_DEMO_TICKETS` | no | `true` for a demo instance |
-| `ANTHROPIC_API_KEY` | no | without it, AI runs in degraded mode (keyword triage, manual replies) |
+| `LLM_PROVIDER` | no | `anthropic` (default) or `gemini` |
+| `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | no | the selected provider's key; without it, AI runs in degraded mode (keyword triage, manual replies). Don't use a free-tier Gemini key with real author data |
+| `LLM_MODEL` | for gemini | e.g. `gemini-3.5-flash-lite`; Anthropic defaults to `claude-haiku-5-5` |
 | `PORT` | no | injected by Render and Railway; defaults to 4000 |
 | `LLM_MODEL`, `LLM_*`, `RATE_LIMIT_*`, `LOG_LEVEL`, `JWT_EXPIRES_IN` | no | defaults in the [table above](#environment-variables) |
 
@@ -410,9 +466,11 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 
 | What | Status | How |
 |---|---|---|
-| Unit + integration tests | ✅ verified | `npm test` against local PostgreSQL 14, Node 22 |
+| Unit + integration tests (144) | ✅ verified | `npm test` against local PostgreSQL 14, Node 22. Both providers are covered with fake SDK transports |
 | Production build and start sequence | ✅ verified locally | `npm run build`, then `npm run start:prod` with `NODE_ENV=production` on a fresh empty database: both migrations applied, seed and 8 demo tickets created, `/health` ok, admin login and queue in urgency order. A second start created 0 demo tickets. The placeholder `JWT_SECRET` was refused, and the generated secret did not appear in the logs |
-| Real Claude API (classification quality, draft quality, prompt caching, token and cost figures) | ❌ not verified | No API key was available. The AI code has only run against a fake SDK transport in tests. Run `npm run ai:eval` with a key to check it. The cost figures in this README are estimates |
+| **Anthropic API** (classification, drafts, prompt caching, token and cost figures) | ❌ **not run against the real API** | No Anthropic key was available. The Anthropic path has only run against a fake SDK transport. The Haiku cost figures in this README are estimates |
+| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md` |
+| Gemini rate-limit, quota-exhausted and invalid-key handling against the live API | ❌ not verified | Not triggered in the real run; covered only with a fake SDK |
 | Docker image build | ❌ not verified | Docker not installed; the `Dockerfile` has never been built |
 | Render deploy (`render.yaml`) | ❌ not verified | Blueprint not applied yet |
 | Railway deploy (`railway.json`) | ❌ not verified | Not deployed yet; the `RAILPACK` builder value and the config-path setting are from Railway's docs, not tested |
@@ -433,6 +491,8 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 - **Overdue detection is a heuristic.** The dataset has only cumulative royalty numbers, no per-quarter ledger. With a
   ledger, the payout-review flag could be exact.
 - **Bank status is unknown** for every seeded author (see `bankLinked`). Real data would come from the payments system.
+- **Gemini latency is uneven on the free tier.** Single calls took anywhere from about 1 s to 15 s, and one of 24 eval
+  calls hit the 15 s timeout. Consider `LLM_TIMEOUT_MS=30000` when running on a Gemini free-tier key.
 - **AI quality is checked by manual review** (`npm run ai:eval`), not by an automated graded eval. Next steps: add
   graded expectations (category accuracy, required phrases, banned claims) and run it in CI on prompt changes. Also
   track admin edit distance between draft and sent reply as a production quality signal.

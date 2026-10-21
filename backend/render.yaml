@@ -23,7 +23,12 @@ services:
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
+      # anthropic (default) or gemini. For gemini also set GEMINI_API_KEY and change LLM_MODEL.
+      - key: LLM_PROVIDER
+        value: anthropic
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
         sync: false
       - key: CORS_ORIGINS
         sync: false
