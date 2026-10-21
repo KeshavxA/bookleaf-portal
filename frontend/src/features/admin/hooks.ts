@@ -61,7 +61,12 @@ export function useUpdateTicket(id: string) {
     onError: (_err, _input, ctx) => {
       if (ctx?.prev) qc.setQueryData(key, ctx.prev);
     },
-    onSuccess: (ticket) => qc.setQueryData<AdminTicket>(key, (prev) => mergeDetail(prev, ticket)),
+    onSuccess: (ticket, input) => {
+      qc.setQueryData<AdminTicket>(key, (prev) => mergeDetail(prev, ticket));
+      // The backend drops the cached draft on a category change, since it was grounded in the old
+      // category's KB. Mark ours stale (without refetching over the admin's text) so the panel can say so.
+      if (input.category) qc.invalidateQueries({ queryKey: qk.admin.draft(id), refetchType: 'none' });
+    },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.admin.lists }),
   });
 }

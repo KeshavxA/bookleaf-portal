@@ -313,11 +313,14 @@ export const handlers = [
     if (details.length) return fail(400, 'VALIDATION_ERROR', 'Invalid update', details);
 
     if (body.status !== undefined) t.status = body.status as TicketStatus;
-    if (body.category !== undefined) {
+    // Same rules as the backend (docs/CONTRACT_CHANGES.md #8): setting the current value is a no-op,
+    // and a category change drops the cached draft.
+    if (body.category !== undefined && body.category !== t.category) {
       t.category = body.category as Category;
       t.categoryOverridden = true;
+      t.draft = null;
     }
-    if (body.priority !== undefined) {
+    if (body.priority !== undefined && body.priority !== t.priority) {
       t.priority = body.priority as Priority;
       t.priorityOverridden = true;
     }
@@ -387,7 +390,10 @@ export const handlers = [
       return fail(400, 'VALIDATION_ERROR', 'Invalid status', [{ field: 'status', message: 'Invalid status' }]);
     const message = { id: nextId('m'), senderType: 'ADMIN' as const, senderName: user.name, body: text, createdAt: nowIso() };
     t.messages.push(message);
+    // Backend behaviour: with no explicit status, OPEN moves to IN_PROGRESS and an unassigned ticket goes to the replier.
     if (body.status) t.status = body.status as TicketStatus;
+    else if (t.status === 'OPEN') t.status = 'IN_PROGRESS';
+    if (!t.assigneeId) t.assigneeId = user.id;
     t.draft = null; // the draft has been used; the next open generates a fresh one
     setAndEmit(t, 'ticket.message');
     return HttpResponse.json(message, { status: 201 });

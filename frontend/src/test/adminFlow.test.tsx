@@ -57,8 +57,11 @@ describe('admin flow (mock API)', () => {
     await user.selectOptions(screen.getByLabelText('Category'), 'DISTRIBUTION_AVAILABILITY');
     expect(await screen.findByText('Overridden')).toBeInTheDocument();
     expect(screen.getByText('AI suggested: ISBN & Metadata')).toBeInTheDocument();
+    expect(await screen.findByText(/category changed\. Regenerate/)).toBeInTheDocument();
 
-    // Edit the draft and send with a status change.
+    // Take ownership, then edit the draft and send with a status change.
+    await user.click(screen.getByRole('button', { name: 'Assign to me' }));
+    expect(await screen.findByRole('button', { name: 'Assigned to you' })).toBeDisabled();
     await user.clear(reply);
     await user.type(reply, 'Hi Rohit, escalated to production. Update within 48 hours.');
     await user.selectOptions(screen.getByLabelText('Set status on send'), 'In Progress');
@@ -69,9 +72,7 @@ describe('admin flow (mock API)', () => {
     expect(screen.getByRole('textbox', { name: 'Reply' })).toHaveValue('');
     await waitFor(() => expect(screen.getByLabelText('Status')).toHaveValue('IN_PROGRESS'));
 
-    // Assign and add an internal note.
-    await user.click(screen.getByRole('button', { name: 'Assign to me' }));
-    expect(await screen.findByRole('button', { name: 'Assigned to you' })).toBeDisabled();
+    // Add an internal note.
     await user.type(screen.getByRole('textbox', { name: 'Add an internal note' }), 'Checked with Amazon seller central.');
     await user.click(screen.getByRole('button', { name: 'Add internal note' }));
     expect(await screen.findByText('Checked with Amazon seller central.')).toBeInTheDocument();

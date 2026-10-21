@@ -96,6 +96,9 @@ export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
         {draft?.source === 'FALLBACK' && !loading && (
           <Banner tone="info">AI was unavailable, so this is a template. Personalise it before sending.</Banner>
         )}
+        {draft && !loading && draftQuery.isStale && (
+          <p className="text-xs text-slate-600">The ticket's category changed. Regenerate to get a draft based on the new category.</p>
+        )}
         {regenerate.isError && <Banner tone="error">{errorMessage(regenerate.error, 'Could not regenerate the draft.')}</Banner>}
         {send.isError && <Banner tone="error">{errorMessage(send.error, 'Your reply was not sent.')} Your text is still here.</Banner>}
         {sentAt && now - sentAt < 60_000 && !send.isPending && (
@@ -133,7 +136,10 @@ export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
           <Field label="Set status on send" className="min-w-40 flex-1">
             {(p) => (
               <Select {...p} value={statusOnSend} disabled={send.isPending} onChange={(e) => setStatusOnSend(e.target.value as TicketStatus | '')}>
-                <option value="">Keep as {STATUS_LABEL[ticket.status]}</option>
+                {/* The backend moves OPEN to IN_PROGRESS on reply when no status is given. */}
+                <option value="">
+                  {ticket.status === 'OPEN' ? 'Default (moves to In Progress)' : `Keep as ${STATUS_LABEL[ticket.status]}`}
+                </option>
                 {TICKET_STATUSES.filter((s) => s !== ticket.status).map((s) => (
                   <option key={s} value={s}>
                     {STATUS_LABEL[s]}
