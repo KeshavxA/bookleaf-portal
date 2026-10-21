@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assessRoyalty, nextPayout, nextPayoutDate } from "../../src/domain/payout";
+import { formatHumanDate } from "../../src/lib/dates";
 
 const d = (s: string) => new Date(`${s}T00:00:00.000Z`);
 const iso = (x: Date) => x.toISOString().slice(0, 10);
@@ -59,5 +60,13 @@ describe("assessRoyalty", () => {
   it("handles in-production books (nothing pending, no dates)", () => {
     const r = assessRoyalty({ royaltyPending: 0, lastRoyaltyPayoutDate: null, publicationDate: null }, today);
     expect(r).toMatchObject({ belowThreshold: false, payoutReviewNeeded: false });
+  });
+});
+
+describe("formatHumanDate", () => {
+  it("uses fixed three-letter months in UTC, never the locale's 'Sept'", () => {
+    expect(formatHumanDate(d("2025-09-01"))).toBe("1 Sep 2025");
+    expect(formatHumanDate(d("2026-11-14"))).toBe("14 Nov 2026");
+    expect(formatHumanDate(new Date("2026-12-31T23:30:00-05:00"))).toBe("1 Jan 2027"); // UTC, not local
   });
 });

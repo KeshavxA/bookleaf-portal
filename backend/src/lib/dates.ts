@@ -15,8 +15,14 @@ export function addDays(d: Date, days: number): Date {
 }
 
 /** "14 Nov 2026" - unambiguous for Indian and US readers alike. */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * "14 Nov 2026", in UTC. Built by hand rather than with toLocaleDateString("en-GB"):
+ * current ICU data abbreviates September as "Sept", which leaked into drafts.
+ */
 export function formatHumanDate(d: Date): string {
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 export function daysBetween(from: Date, to: Date): number {
