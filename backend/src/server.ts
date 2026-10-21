@@ -1,12 +1,15 @@
 import { env, envSummary } from "./config/env";
+import { apiKeyVarFor, selectedApiKey } from "./ai/llm/providers";
 import { logger } from "./lib/logger";
 import { buildContainer } from "./container";
 import { createApp } from "./app";
 
 async function main() {
   logger.info({ config: envSummary(env) }, "Configuration loaded");
-  if (!env.ANTHROPIC_API_KEY) {
-    logger.warn("ANTHROPIC_API_KEY is not set: AI is in degraded mode (keyword triage, no drafts; admins reply manually)");
+  if (!selectedApiKey(env)) {
+    logger.warn(
+      `${apiKeyVarFor(env.LLM_PROVIDER)} is not set (LLM_PROVIDER=${env.LLM_PROVIDER}): AI is in degraded mode (keyword triage, no drafts; admins reply manually)`,
+    );
   }
 
   const container = buildContainer();

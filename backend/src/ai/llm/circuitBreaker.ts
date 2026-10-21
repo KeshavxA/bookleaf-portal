@@ -63,6 +63,12 @@ export class CircuitBreaker {
     if (this.state === "HALF_OPEN") this.state = "CLOSED";
   }
 
+  /** Open immediately, e.g. when the provider says the quota is exhausted. */
+  tripOpen(): void {
+    this.probeInFlight = false;
+    this.trip();
+  }
+
   getState(): BreakerState {
     return this.state;
   }

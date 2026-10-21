@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { z } from "zod";
+import { GEMINI_THINKING_SETTINGS } from "../ai/llm/providers/gemini";
+import { LLM_PROVIDERS, apiKeyVarFor, selectedApiKey } from "../ai/llm/providers";
 
 const bool = z
   .enum(["true", "false", "1", "0"])
@@ -8,6 +10,14 @@ const bool = z
 /** The placeholder shipped in .env.example. Fine for local dev, never for production. */
 export const DEV_DEFAULT_JWT_SECRET = "change-me-to-a-long-random-string-at-least-32-chars";
 const MIN_JWT_SECRET_LENGTH = 32;
+/** Only Anthropic has a default model. Gemini ids change too often to hardcode one. */
+export const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5";
+
+const optionalSecret = z.string().optional().transform((v) => (v ? v : undefined));
+const optionalPrice = z.preprocess(
+  (v) => (v === "" || v === undefined ? undefined : v),
+  z.coerce.number().nonnegative("must be a non-negative number").optional(),
+);
 
 const EnvSchema = z
   .object({
@@ -30,9 +40,21 @@ const EnvSchema = z
     JWT_SECRET: z.string().optional().transform((v) => (v ? v : undefined)),
     JWT_EXPIRES_IN: z.string().default("8h"),
 
-    // Optional: without a key the app runs in degraded mode (keyword triage, manual replies).
-    ANTHROPIC_API_KEY: z.string().optional().transform((v) => (v ? v : undefined)),
-    LLM_MODEL: z.string().default("claude-haiku-5-5"),
+    // Which LLM serves classification and drafts. Only the selected provider's key is used.
+    LLM_PROVIDER: z.enum(LLM_PROVIDERS).default("anthropic"),
+    // Optional: without the selected provider's key the app runs in degraded mode (keyword triage, manual replies).
+    ANTHROPIC_API_KEY: optionalSecret,
+    GEMINI_API_KEY: optionalSecret,
+    // Defaults to claude-haiku-5-5 for Anthropic; required for Gemini (checked in llmModelProblems).
+    LLM_MODEL: z.string().trim().optional().transform((v) => (v ? v : undefined)),
+    // Classifier thinking on Gemini: "minimal" where the model supports it, "off" = thinkingBudget 0 (2.5 models).
+    GEMINI_CLASSIFIER_THINKING: z.enum(GEMINI_THINKING_SETTINGS).default("minimal"),
+    // USD per million tokens, for AiCall.estCost only. Anthropic: unset = built-in rate card.
+    ANTHROPIC_PRICE_INPUT_PER_MTOK: optionalPrice,
+    ANTHROPIC_PRICE_OUTPUT_PER_MTOK: optionalPrice,
+    // Gemini: default 0 (free tier). Set the paid rates if you use a billed project.
+    GEMINI_PRICE_INPUT_PER_MTOK: optionalPrice.transform((v) => v ?? 0),
+    GEMINI_PRICE_OUTPUT_PER_MTOK: optionalPrice.transform((v) => v ?? 0),
     LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
     LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     LLM_BREAKER_THRESHOLD: z.coerce.number().int().positive().default(5),
@@ -46,7 +68,12 @@ const EnvSchema = z
     // Demo tickets for a fresh deploy (see src/seed/demoTickets.ts). Off unless asked for.
     SEED_DEMO_TICKETS: bool.default(false),
   })
-  .transform((e) => ({ ...e, JWT_SECRET: e.JWT_SECRET ?? DEV_DEFAULT_JWT_SECRET }));
+  .transform((e) => ({
+    ...e,
+    JWT_SECRET: e.JWT_SECRET ?? DEV_DEFAULT_JWT_SECRET,
+    // Empty only when Gemini is selected without a model, which parseEnv rejects.
+    LLM_MODEL: e.LLM_MODEL ?? (e.LLM_PROVIDER === "anthropic" ? DEFAULT_ANTHROPIC_MODEL : ""),
+  }));
 
 export type Env = z.infer<typeof EnvSchema>;
 
@@ -63,9 +90,23 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
   const problems = [
     ...(parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join(".") || "(env)"}: ${i.message}`)),
     ...jwtSecretProblems(source.JWT_SECRET || undefined, source.NODE_ENV === "production"),
+    ...llmProblems(source),
   ];
   if (problems.length > 0 || !parsed.success) throw new ConfigError(problems);
   return parsed.data;
+}
+
+function llmProblems(source: Record<string, string | undefined>): string[] {
+  const problems: string[] = [];
+  if (source.LLM_PROVIDER === "gemini" && !source.LLM_MODEL?.trim()) {
+    problems.push(
+      "LLM_MODEL: is required when LLM_PROVIDER=gemini (no default: Gemini model ids change often; see README)",
+    );
+  }
+  if (Boolean(source.ANTHROPIC_PRICE_INPUT_PER_MTOK) !== Boolean(source.ANTHROPIC_PRICE_OUTPUT_PER_MTOK)) {
+    problems.push("ANTHROPIC_PRICE_INPUT_PER_MTOK / ANTHROPIC_PRICE_OUTPUT_PER_MTOK: set both or neither");
+  }
+  return problems;
 }
 
 /** Checked outside the schema so these are reported even when other variables are invalid too. */
@@ -91,12 +132,13 @@ export function envSummary(e: Env) {
       secret: e.JWT_SECRET === DEV_DEFAULT_JWT_SECRET ? "dev default" : "set",
       expiresIn: e.JWT_EXPIRES_IN,
     },
+    // Provider, model and key presence only. Never key values.
     ai: {
-      mode: e.ANTHROPIC_API_KEY ? "enabled" : "degraded",
-      apiKey: e.ANTHROPIC_API_KEY ? "set" : "not set",
+      provider: e.LLM_PROVIDER,
       model: e.LLM_MODEL,
-      timeoutMs: e.LLM_TIMEOUT_MS,
-      maxRetries: e.LLM_MAX_RETRIES,
+      mode: selectedApiKey(e) ? "enabled" : "degraded",
+      apiKey: selectedApiKey(e) ? "set" : "not set",
+      apiKeyVar: apiKeyVarFor(e.LLM_PROVIDER),
     },
     rateLimits: {
       login: `${e.RATE_LIMIT_LOGIN_MAX}/${e.RATE_LIMIT_LOGIN_WINDOW_MS}ms`,

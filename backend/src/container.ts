@@ -9,7 +9,7 @@ import { logger as rootLogger } from "./lib/logger";
 import { prisma as defaultPrisma, type Db } from "./lib/prisma";
 import { LlmClient } from "./ai/llm/client";
 import { CircuitBreaker } from "./ai/llm/circuitBreaker";
-import { AnthropicProvider } from "./ai/llm/providers/anthropic";
+import { createLlmProvider } from "./ai/llm/providers";
 import type { LlmPort } from "./ai/llm/types";
 import { TicketClassifier } from "./ai/classifier/classifier";
 import { TicketDrafter } from "./ai/drafter/drafter";
@@ -50,7 +50,7 @@ export function buildContainer(overrides: ContainerOverrides = {}) {
   const llm =
     overrides.llm ??
     new LlmClient({
-      provider: new AnthropicProvider({ apiKey: env.ANTHROPIC_API_KEY, model: env.LLM_MODEL }),
+      provider: createLlmProvider(env),
       timeoutMs: env.LLM_TIMEOUT_MS,
       maxRetries: env.LLM_MAX_RETRIES,
       breaker: new CircuitBreaker({ threshold: env.LLM_BREAKER_THRESHOLD, cooldownMs: env.LLM_BREAKER_COOLDOWN_MS }),

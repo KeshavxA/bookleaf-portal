@@ -1,4 +1,5 @@
 import { CircuitBreaker } from "./circuitBreaker";
+import { apiKeyVarFor } from "./providers";
 import {
   LlmError,
   LlmOutputError,
@@ -33,8 +34,10 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 /**
  * Provider-agnostic policy around one LlmProvider:
  *  - per-attempt timeout; SDK-level retries disabled so retry policy lives here
- *  - retries with exponential backoff + jitter on 429 / 5xx / connection resets (honours retry-after)
- *  - circuit breaker shared by every caller
+ *  - retries with exponential backoff + jitter on 429 / 5xx / connection resets
+ *  - honours a server-requested retry delay, but never waits past timeoutMs in total to do so
+ *  - circuit breaker shared by every caller; an exhausted quota (or a retry delay longer than
+ *    that budget) opens it immediately so we stop calling and degrade until it cools down
  *  - exactly one AiCall row per logical call, including failures, with token usage and cost
  *
  * API keys live inside the providers; nothing here logs or stores them.
@@ -69,7 +72,7 @@ export class LlmClient implements LlmPort {
     };
 
     if (!provider.enabled) {
-      await finish("DISABLED", { code: "DISABLED", message: `${keyVarFor(provider.name)} is not configured` });
+      await finish("DISABLED", { code: "DISABLED", message: `${apiKeyVarFor(provider.name)} is not configured` });
       throw new LlmError("DISABLED", "AI is not configured on this server");
     }
     if (!breaker.tryAcquire()) {
@@ -78,6 +81,7 @@ export class LlmClient implements LlmPort {
     }
 
     const { kind: _kind, ticketId: _ticketId, ...body } = request;
+    let waitedMs = 0;
     for (;;) {
       attempts += 1;
       try {
@@ -109,9 +113,11 @@ export class LlmClient implements LlmPort {
         if (err instanceof LlmOutputError) throw err; // defensive; handled above
 
         const classified = provider.classifyError(err);
-        const canRetry = classified.retryable && attempts <= this.opts.maxRetries;
-        if (canRetry) {
-          const delay = backoffMs(attempts, classified.retryAfterMs);
+        const delay = backoffMs(attempts, classified.retryAfterMs);
+        // Computed backoff is already bounded (<= 4s per retry). A server-requested delay can be long
+        // (Gemini free tier often says ~30-60s), so it must fit in the remaining wait budget.
+        const withinBudget = classified.retryAfterMs === undefined || waitedMs + delay <= this.opts.timeoutMs;
+        if (classified.retryable && attempts <= this.opts.maxRetries && withinBudget) {
           this.opts.onWarn?.("LLM call failed, retrying", {
             provider: provider.name,
             kind: request.kind,
@@ -120,11 +126,22 @@ export class LlmClient implements LlmPort {
             code: classified.code,
             delayMs: delay,
           });
+          waitedMs += delay;
           await this.sleep(delay);
           continue;
         }
 
-        if (classified.upstreamFailure) breaker.onFailure();
+        // Quota gone, or the API wants a longer pause than we will wait: stop calling it at all
+        // until the breaker cools down. Callers degrade (keyword triage, draft=null) meanwhile.
+        const backOff = classified.quotaExhausted || (classified.code === "RATE_LIMITED" && !withinBudget);
+        if (backOff) {
+          breaker.tripOpen();
+          this.opts.onWarn?.("LLM rate limit/quota hit; circuit opened", {
+            provider: provider.name,
+            code: classified.code,
+            retryAfterMs: classified.retryAfterMs,
+          });
+        } else if (classified.upstreamFailure) breaker.onFailure();
         else breaker.onNeutral();
         await finish(classified.status, { code: classified.code, message: classified.message });
         throw new LlmError(classified.code, classified.message, classified.upstreamFailure);
@@ -161,12 +178,9 @@ export class LlmClient implements LlmPort {
   }
 }
 
-export function keyVarFor(provider: LlmProvider["name"]): string {
-  return provider === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
-}
-
+/** Server-requested delays are taken as given (providers may cap them); the client enforces the total budget. */
 export function backoffMs(attempt: number, retryAfterMs?: number): number {
-  if (retryAfterMs !== undefined) return Math.min(retryAfterMs, MAX_BACKOFF_MS);
+  if (retryAfterMs !== undefined) return retryAfterMs;
   const exp = BASE_BACKOFF_MS * 2 ** (attempt - 1);
   const jitter = Math.random() * BASE_BACKOFF_MS;
   return Math.min(exp + jitter, MAX_BACKOFF_MS);
