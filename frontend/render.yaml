@@ -1,0 +1,27 @@
+# Render Blueprint for the frontend as a static site.
+# Use it as its own Blueprint (New > Blueprint, Blueprint path: frontend/render.yaml) or copy the
+# service into a repo-root render.yaml next to the backend service.
+services:
+  - type: web
+    runtime: static
+    name: bookleaf-portal-web
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # Absolute URL of the deployed backend, including /api/v1. Set it in the dashboard.
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_USE_MOCKS
+        value: "false"
+    routes:
+      # SPA fallback: deep links such as /tickets/:id and /admin/tickets/:id serve index.html on refresh.
+      # Render only applies rewrites when no real file matches, so /assets/* is unaffected.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Hashed build assets can be cached forever; index.html is left at Render's default.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
