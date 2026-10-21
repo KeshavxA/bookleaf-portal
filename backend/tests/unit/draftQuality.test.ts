@@ -90,8 +90,18 @@ describe("FACTS and focus are built by category", () => {
       }),
     );
     expect(prod).toContain("Current production stage: Cover Design");
-    expect(prod).toContain("no sales or royalties yet");
-    expect(prod).not.toMatch(/Royalty earned|Next scheduled payout|Bank details/);
+    // no money wording at all for a production question
+    expect(prod).not.toMatch(/royalt|sales|payout|Bank details|₹/i);
+
+    // ...unless the author asks about money
+    const prodMoney = buildFacts(
+      ctx("BOOK_STATUS_PRODUCTION", "Royalty?", "When will I start earning royalty on it?", {
+        ...live,
+        status: "In Production - Cover Design",
+        publicationDate: null,
+      }),
+    );
+    expect(prodMoney).toContain("Sales and royalties: none yet, because the book is not published");
 
     const royalty = buildFacts(ctx("ROYALTY_PAYMENTS", "Royalty", "Where is my royalty?"));
     expect(royalty).toMatch(/Bank details linked in dashboard: unknown - ask the author once/);

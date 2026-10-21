@@ -29,7 +29,7 @@ export function productionStage(status: string): string | null {
  *   - ISBN_METADATA: the ISBN on record
  *   - PRINTING_QUALITY: the print partner
  *   - DISTRIBUTION_AVAILABILITY: the platforms the book is on
- *   - BOOK_STATUS_PRODUCTION: status and production stage
+ *   - BOOK_STATUS_PRODUCTION: status and production stage (no money wording unless the author asked about money)
  *   - GENERAL_INQUIRY: book title and status only
  */
 export function buildFacts(ctx: DraftContext): string {
@@ -68,11 +68,14 @@ function bookLines(book: DraftBookInput, category: Category, payment: boolean, t
   const out: string[] = [`Book: "${book.title}"`];
 
   if (isInProduction(book.status)) {
-    out.push(`  Status: ${book.status} - not yet published, so there are no sales or royalties yet`);
+    // Status and stage only. A "no sales or royalties yet" line here made the model talk about
+    // money on production tickets (Gemini eval run 1), so money appears only if the author asked.
+    out.push(`  Status: ${book.status}`);
     const stage = productionStage(book.status);
     if (stage) out.push(`  Current production stage: ${stage}`);
     out.push("  Exact completion date: not in our records (team must confirm)");
     if (category === "ISBN_METADATA") out.push(`  ISBN on record: ${book.isbn}`);
+    if (payment) out.push("  Sales and royalties: none yet, because the book is not published");
     return out;
   }
 

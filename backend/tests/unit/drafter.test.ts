@@ -64,12 +64,18 @@ describe("FACTS block", () => {
   it("omits money entirely for books in production", () => {
     const facts = buildFacts(
       ctx({
-        ticket: { ...ctx().ticket, category: "BOOK_STATUS_PRODUCTION" },
+        ticket: {
+          ...ctx().ticket,
+          category: "BOOK_STATUS_PRODUCTION",
+          subject: "Still in typesetting",
+          description: "It's been 3 weeks. When will it be done?",
+        },
         book: { ...publishedBook, status: "In Production - Typesetting", publicationDate: null, mrp: null, royaltyPending: 0 },
       }),
     );
-    expect(facts).toContain("In Production - Typesetting - not yet published");
-    expect(facts).not.toMatch(/Royalty earned|Next scheduled payout|MRP/);
+    expect(facts).toContain("Status: In Production - Typesetting");
+    expect(facts).toContain("Current production stage: Typesetting");
+    expect(facts).not.toMatch(/royalt|sales|Royalty earned|Next scheduled payout|MRP/i);
   });
 
   it("leaves royalty figures out of non-money categories (token discipline)", () => {
