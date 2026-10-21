@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { kbSectionFor } from "../kb";
 import { formatHumanDate } from "../../lib/dates";
+import { escapeTags, userText } from "../promptText";
 import { DRAFTER_SYSTEM_PROMPT } from "./systemPrompt";
 import { buildFacts } from "./facts";
 import type { DraftContext } from "./types";
@@ -9,13 +10,14 @@ export const THREAD_WINDOW = 6;
 const DESCRIPTION_MAX_CHARS = 3000;
 const MESSAGE_MAX_CHARS = 1500;
 
-const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max)}… [truncated]` : s);
-
 /**
  * Prompt layout (stable -> volatile, so the prefix caches):
  *   system[0] static instructions           cache breakpoint (shared by every draft)
  *   system[1] KB section for this category  cache breakpoint (shared per category)
  *   user      FACTS + original query + last N thread messages
+ *
+ * Everything the author (or staff) typed goes through userText(): escaped so it
+ * cannot close <original_query>/<thread> or forge a <facts> block, and capped in length.
  */
 export function buildDraftPrompt(ctx: DraftContext): {
   system: Anthropic.TextBlockParam[];
@@ -30,7 +32,7 @@ export function buildDraftPrompt(ctx: DraftContext): {
     ? recent
         .map((m) => {
           const who = m.senderType === "AUTHOR" ? `Author (${m.senderName})` : `BookLeaf staff (${m.senderName})`;
-          return `[${who}, ${formatHumanDate(m.createdAt)}]\n${clip(m.body, MESSAGE_MAX_CHARS)}`;
+          return `[${escapeTags(who)}, ${formatHumanDate(m.createdAt)}]\n${userText(m.body, MESSAGE_MAX_CHARS)}`;
         })
         .join("\n\n")
     : "(no replies yet)";
@@ -44,8 +46,11 @@ export function buildDraftPrompt(ctx: DraftContext): {
 ${facts}
 </facts>
 
-<original_query subject="${ctx.ticket.subject.replace(/"/g, "'")}">
-${clip(ctx.ticket.description, DESCRIPTION_MAX_CHARS)}
+<original_query>
+<subject>${escapeTags(ctx.ticket.subject)}</subject>
+<description>
+${userText(ctx.ticket.description, DESCRIPTION_MAX_CHARS)}
+</description>
 </original_query>
 
 <thread${omitted > 0 ? ` note="${omitted} older message(s) omitted"` : ""}>

@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { escapeTags, userText } from "../promptText";
 
 export const DESCRIPTION_MAX_CHARS = 2000;
 
@@ -36,10 +37,6 @@ RULES
 - reasoning: one short phrase, at most 20 words, citing the deciding detail. No author names.`;
 
 export function buildClassifierMessages(input: ClassifierInput): Anthropic.MessageParam[] {
-  const description =
-    input.description.length > DESCRIPTION_MAX_CHARS
-      ? `${input.description.slice(0, DESCRIPTION_MAX_CHARS)}… [truncated]`
-      : input.description;
   const book = input.book ? `${input.book.title} (status: ${input.book.status})` : "None - general / account-level query";
 
   return [
@@ -49,14 +46,9 @@ export function buildClassifierMessages(input: ClassifierInput): Anthropic.Messa
 <book>${escapeTags(book)}</book>
 <subject>${escapeTags(input.subject)}</subject>
 <description>
-${escapeTags(description)}
+${userText(input.description, DESCRIPTION_MAX_CHARS)}
 </description>
 </ticket>`,
     },
   ];
-}
-
-/** Stops author text from closing our delimiters and injecting fake sections. */
-function escapeTags(s: string): string {
-  return s.replace(/</g, "‹").replace(/>/g, "›");
 }
