@@ -5,6 +5,7 @@ import { escapeTags, userText } from "../promptText";
 import { DRAFTER_SYSTEM_PROMPT } from "./systemPrompt";
 import { buildFacts } from "./facts";
 import { isPaymentRelated } from "./relevance";
+import { applicablePoints } from "./requiredPoints";
 import type { DraftContext } from "./types";
 
 export const THREAD_WINDOW = 6;
@@ -21,7 +22,10 @@ const MESSAGE_MAX_CHARS = 1500;
  * Everything the author (or staff) typed goes through userText(): escaped so it
  * cannot close <original_query>/<thread> or forge a <facts> block, and capped in length.
  */
-/** Per-ticket instructions computed in code (not cached: they vary with category and content). */
+/**
+ * Per-ticket instructions computed in code (not cached: they vary with category and content):
+ * whether money belongs in the reply, and the KB points to cover (see requiredPoints.ts).
+ */
 export function focusNotes(ctx: DraftContext): string[] {
   const notes: string[] = [];
   if (isPaymentRelated(ctx)) {
@@ -29,15 +33,11 @@ export function focusNotes(ctx: DraftContext): string[] {
   } else {
     notes.push("- This ticket is not about payment. Do not mention royalties, payouts, payment dates, the payout threshold or bank details.");
   }
-  const topic: Partial<Record<DraftContext["ticket"]["category"], string>> = {
-    ISBN_METADATA: "- Topic: ISBN or metadata. Refer to the ISBN on record where it helps.",
-    PRINTING_QUALITY: "- Topic: print quality. Refer to the print partner where it helps.",
-    DISTRIBUTION_AVAILABILITY: "- Topic: availability. Refer to the platforms the book is on.",
-    BOOK_STATUS_PRODUCTION: "- Topic: production status. Refer to the current stage; no sales or royalty talk.",
-    GENERAL_INQUIRY: "- Topic: general question. Answer it directly from POLICY; do not add unrelated account details.",
-  };
-  const t = topic[ctx.ticket.category];
-  if (t) notes.push(t);
+  const points = applicablePoints(ctx);
+  if (points.length > 0) {
+    notes.push("- Cover these points (skip one only if it clearly does not apply):");
+    points.forEach((p, i) => notes.push(`  ${i + 1}. ${p.instruction}`));
+  }
   return notes;
 }
 
