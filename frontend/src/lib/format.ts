@@ -74,7 +74,7 @@ export function isOlderThanDays(from: string, days: number, now = Date.now()) {
   return ageMs(from, now) > days * DAY;
 }
 
-/** Backend ticket numbers are integers; show them as "#42". Pre-formatted strings pass through. */
-export function formatTicketNumber(n: number | string) {
-  return typeof n === 'number' || /^\d+$/.test(n) ? `#${n}` : n;
+/** The single formatter for ticket numbers: the contract sends an integer, users see "#42". */
+export function formatTicketNumber(n: number) {
+  return `#${n}`;
 }

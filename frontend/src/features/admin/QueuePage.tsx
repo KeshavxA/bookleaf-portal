@@ -3,7 +3,6 @@ import { Button } from '@/components/Button';
 import { Skeleton } from '@/components/Skeleton';
 import { EmptyState, ErrorState } from '@/components/States';
 import { UpdatedCue } from '@/components/UpdatedCue';
-import { useAuth } from '@/features/auth/AuthContext';
 import { useChangeCue } from '@/hooks/useChangeCue';
 import { useAdminTickets } from './hooks';
 import { QueueFilters } from './QueueFilters';
@@ -11,10 +10,9 @@ import { PAGE_SIZE, toApiQuery, useQueueFilters } from './queueParams';
 import { QueueTable, STALE_DAYS } from './QueueTable';
 
 export function QueuePage() {
-  const { user } = useAuth();
   const { filters, update, clear, active } = useQueueFilters();
   const { data, isPending, isError, error, refetch, isFetching, isPlaceholderData } = useAdminTickets(
-    toApiQuery(filters, user?.id),
+    toApiQuery(filters),
   );
   // Scoped to the current filters/page, so only live changes within the same view show the cue.
   const changedAt = useChangeCue(

@@ -28,8 +28,14 @@ export type ErrorCode =
   | 'RATE_LIMITED'
   | 'INTERNAL';
 
+/** field is a dotted path (e.g. "attachments.0.size") or "(root)" for whole-body errors. */
+export interface ErrorDetail {
+  field: string;
+  message: string;
+}
+
 export interface ApiErrorBody {
-  error: { code: ErrorCode; message: string; details?: unknown[] };
+  error: { code: ErrorCode; message: string; details?: ErrorDetail[] };
 }
 
 export interface User {
@@ -74,19 +80,23 @@ export interface Attachment {
   size: number;
 }
 
-export interface AuthorTicket {
+/** List shape (GET /tickets): the contract omits the "messages" key entirely. */
+export interface AuthorTicketSummary {
   id: string;
-  /** The contract leaves the type open; the backend sends an integer. Display via formatTicketNumber. */
-  ticketNumber: number | string;
+  /** Integer, auto-increment from 1. Display with formatTicketNumber ("#42"). */
+  ticketNumber: number;
   subject: string;
   description: string;
   status: TicketStatus;
   book: { id: string; title: string } | null;
   attachments: Attachment[];
-  /** Omitted on list endpoints. */
-  messages?: Message[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** Single-ticket shape (GET /tickets/:id, POST /tickets). */
+export interface AuthorTicket extends AuthorTicketSummary {
+  messages: Message[];
 }
 
 export interface InternalNote {
@@ -98,21 +108,33 @@ export interface InternalNote {
 
 export interface Draft {
   body: string;
-  source: 'AI' | 'FALLBACK';
+  source: 'AI';
   generatedAt: string;
 }
 
-export interface AdminTicket extends AuthorTicket {
+export interface AiSuggestion {
+  category: Category;
+  priority: Priority;
+  reasoning: string;
+}
+
+/** List shape (GET /admin/tickets items): everything except the "messages" key. */
+export interface AdminTicketSummary extends AuthorTicketSummary {
   category: Category;
   priority: Priority;
   aiStatus: AiStatus;
-  aiSuggestion: { category: Category; priority: Priority; reasoning: string } | null;
+  aiSuggestion: AiSuggestion | null;
   categoryOverridden: boolean;
   priorityOverridden: boolean;
   author: { id: string; name: string; email: string };
   assignee: { id: string; name: string } | null;
-  internalNotes?: InternalNote[];
-  draft?: Draft | null;
+  internalNotes: InternalNote[];
+  draft: Draft | null;
+}
+
+/** Single-ticket shape (GET/PATCH /admin/tickets/:id and the action endpoints). */
+export interface AdminTicket extends AdminTicketSummary {
+  messages: Message[];
 }
 
 export interface Paginated<T> {
@@ -131,11 +153,16 @@ export interface CreateTicketInput {
 
 export type QueueSort = 'urgency' | 'oldest' | 'newest';
 
+/** "me" and "unassigned" are special assigneeId values; anything else is a user id. */
+export type AssigneeFilter = 'me' | 'unassigned' | (string & {});
+
 export interface AdminTicketQuery {
-  status?: TicketStatus;
-  category?: Category;
-  priority?: Priority;
-  assigneeId?: string;
+  /** Multi-value filters are sent comma-separated (?status=OPEN,IN_PROGRESS). */
+  status?: TicketStatus[];
+  category?: Category[];
+  priority?: Priority[];
+  assigneeId?: AssigneeFilter;
+  /** Bare dates (yyyy-mm-dd). The server reads them in UTC; a bare "to" covers that whole day. */
   from?: string;
   to?: string;
   q?: string;

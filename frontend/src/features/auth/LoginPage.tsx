@@ -2,12 +2,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Navigate, useLocation, useNavigate } from 'react-router';
-import { ApiError, errorMessage } from '@/api/client';
+import { ApiError } from '@/api/client';
 import { Button } from '@/components/Button';
 import { Field, Input } from '@/components/Field';
 import { Banner } from '@/components/States';
 import { FullPageSpinner } from '@/components/Spinner';
 import { config } from '@/lib/config';
+import { applyServerErrors } from '@/lib/serverErrors';
 import { homeFor, useAuth } from './AuthContext';
 
 const schema = z.object({
@@ -48,9 +49,12 @@ export function LoginPage() {
       const target = from && (u.role === 'ADMIN') === from.startsWith('/admin') ? from : home;
       navigate(target, { replace: true });
     } catch (e) {
-      const msg =
-        e instanceof ApiError && e.status === 401 ? 'That email and password combination is incorrect.' : errorMessage(e);
-      setError('root', { message: msg });
+      if (e instanceof ApiError && e.status === 401) {
+        setError('root.server', { message: 'That email and password combination is incorrect.' });
+      } else {
+        // Covers validation details and 429 ("Too many requests, try again shortly.").
+        applyServerErrors(e, setError, ['email', 'password']);
+      }
     }
   };
 
@@ -63,7 +67,7 @@ export function LoginPage() {
         </div>
         <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           {logoutReason === 'expired' && <Banner tone="warning">Your session has expired. Please sign in again.</Banner>}
-          {errors.root?.message && <Banner tone="error">{errors.root.message}</Banner>}
+          {errors.root?.server?.message && <Banner tone="error">{errors.root.server.message}</Banner>}
           <Field label="Email" error={errors.email?.message}>
             {(p) => <Input {...p} type="email" autoComplete="email" autoFocus {...register('email')} />}
           </Field>

@@ -1,19 +1,21 @@
 import { Link, useLocation, useNavigate } from 'react-router';
-import type { AdminTicket } from '@/api/types';
-import { Badge, CategoryBadge, PriorityBadge, StatusBadge } from '@/components/Badge';
+import type { AdminTicketSummary } from '@/api/types';
+import { CategoryBadge, PriorityBadge, StatusBadge } from '@/components/Badge';
 import { useNow } from '@/hooks/useNow';
+import { isClassifying, needsManualTriage } from '@/lib/aiState';
 import { cn } from '@/lib/cn';
 import { formatAge, formatDateTime, formatTicketNumber, isOlderThanDays } from '@/lib/format';
 import { isUnresolved } from '@/lib/labels';
+import { ClassifyingBadge, NeedsTriageBadge, Provisional } from './AiBadges';
 
 export const STALE_DAYS = 3;
 
-const ROW_ACCENT: Partial<Record<AdminTicket['priority'], string>> = {
+const ROW_ACCENT: Partial<Record<AdminTicketSummary['priority'], string>> = {
   CRITICAL: 'shadow-[inset_4px_0_0_var(--color-red-600)] bg-red-50/40',
   HIGH: 'shadow-[inset_4px_0_0_var(--color-orange-400)]',
 };
 
-export function QueueTable({ tickets }: { tickets: AdminTicket[] }) {
+export function QueueTable({ tickets }: { tickets: AdminTicketSummary[] }) {
   const now = useNow(60_000);
   const navigate = useNavigate();
   const { search } = useLocation();
@@ -39,6 +41,7 @@ export function QueueTable({ tickets }: { tickets: AdminTicket[] }) {
             const open = isUnresolved(t.status);
             const stale = open && isOlderThanDays(t.createdAt, STALE_DAYS, now);
             const href = `/admin/tickets/${t.id}`;
+            const classifying = isClassifying(t);
             return (
               <tr
                 key={t.id}
@@ -56,19 +59,17 @@ export function QueueTable({ tickets }: { tickets: AdminTicket[] }) {
                   <div className="text-xs text-slate-500">{formatTicketNumber(t.ticketNumber)}</div>
                 </td>
                 <td className="px-3 py-3">
-                  <PriorityBadge priority={t.priority} />
+                  <Provisional active={classifying}>
+                    <PriorityBadge priority={t.priority} />
+                  </Provisional>
                 </td>
                 <td className="px-3 py-3">
-                  {t.aiStatus === 'PENDING' ? (
-                    <Badge className="bg-slate-50 text-slate-500 ring-slate-200">Classifying…</Badge>
-                  ) : (
-                    <div className="flex flex-col items-start gap-1">
+                  <div className="flex flex-col items-start gap-1">
+                    <Provisional active={classifying}>
                       <CategoryBadge category={t.category} />
-                      {t.aiStatus === 'FAILED' && (
-                        <Badge className="bg-amber-50 text-amber-800 ring-amber-300">Needs triage</Badge>
-                      )}
-                    </div>
-                  )}
+                    </Provisional>
+                    {classifying ? <ClassifyingBadge /> : needsManualTriage(t) && <NeedsTriageBadge />}
+                  </div>
                 </td>
                 <td className="px-3 py-3">
                   <StatusBadge status={t.status} />

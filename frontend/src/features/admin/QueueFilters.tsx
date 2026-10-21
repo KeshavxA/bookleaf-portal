@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { CATEGORIES, PRIORITIES, TICKET_STATUSES, type QueueSort } from '@/api/types';
 import { Button } from '@/components/Button';
 import { Field, Input, Select } from '@/components/Field';
+import { MultiSelect } from '@/components/MultiSelect';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { CATEGORY_LABEL, PRIORITY_LABEL, STATUS_LABEL } from '@/lib/labels';
-import type { QueueFilters as Filters } from './queueParams';
+import type { AssigneeChoice, QueueFilters as Filters } from './queueParams';
 
 interface Props {
   filters: Filters;
@@ -12,6 +13,13 @@ interface Props {
   onClear: () => void;
   active: boolean;
 }
+
+const options = <T extends string>(values: readonly T[], labels: Record<T, string>) =>
+  values.map((value) => ({ value, label: labels[value] }));
+
+const STATUS_OPTIONS = options(TICKET_STATUSES, STATUS_LABEL);
+const CATEGORY_OPTIONS = options(CATEGORIES, CATEGORY_LABEL);
+const PRIORITY_OPTIONS = options(PRIORITIES, PRIORITY_LABEL);
 
 export function QueueFilters({ filters, onChange, onClear, active }: Props) {
   // Search is typed locally and pushed to the URL after a pause, so each keystroke isn't a request.
@@ -26,64 +34,30 @@ export function QueueFilters({ filters, onChange, onClear, active }: Props) {
   return (
     <section aria-label="Filters" className="mb-4 rounded-lg border border-slate-200 bg-white p-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-        <Field label="Search" className="sm:col-span-2 xl:col-span-2">
-          {(p) => (
-            <Input
-              {...p}
-              type="search"
-              placeholder="Subject, author, book, #number"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          )}
+        <Field label="Search" className="sm:col-span-2 xl:col-span-2" hint="Subject, author, book or #number">
+          {(p) => <Input {...p} type="search" placeholder="e.g. royalty or #42" value={search} onChange={(e) => setSearch(e.target.value)} />}
         </Field>
-        <Field label="Status">
+        <MultiSelect label="Status" allLabel="All statuses" options={STATUS_OPTIONS} value={filters.status} onChange={(status) => onChange({ status })} />
+        <MultiSelect label="Category" allLabel="All categories" options={CATEGORY_OPTIONS} value={filters.category} onChange={(category) => onChange({ category })} />
+        <MultiSelect label="Priority" allLabel="All priorities" options={PRIORITY_OPTIONS} value={filters.priority} onChange={(priority) => onChange({ priority })} />
+        <Field label="Assignee">
           {(p) => (
-            <Select {...p} value={filters.status} onChange={(e) => onChange({ status: e.target.value as Filters['status'] })}>
-              <option value="">All statuses</option>
-              {TICKET_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABEL[s]}
-                </option>
-              ))}
-            </Select>
-          )}
-        </Field>
-        <Field label="Category">
-          {(p) => (
-            <Select {...p} value={filters.category} onChange={(e) => onChange({ category: e.target.value as Filters['category'] })}>
-              <option value="">All categories</option>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {CATEGORY_LABEL[c]}
-                </option>
-              ))}
-            </Select>
-          )}
-        </Field>
-        <Field label="Priority">
-          {(p) => (
-            <Select {...p} value={filters.priority} onChange={(e) => onChange({ priority: e.target.value as Filters['priority'] })}>
-              <option value="">All priorities</option>
-              {PRIORITIES.map((pr) => (
-                <option key={pr} value={pr}>
-                  {PRIORITY_LABEL[pr]}
-                </option>
-              ))}
+            <Select {...p} value={filters.assignee} onChange={(e) => onChange({ assignee: e.target.value as AssigneeChoice })}>
+              <option value="">Anyone</option>
+              <option value="me">Assigned to me</option>
+              <option value="unassigned">Unassigned</option>
             </Select>
           )}
         </Field>
         <Field label="Created from">
-          {(p) => (
-            <Input {...p} type="date" value={filters.from} max={filters.to || undefined} onChange={(e) => onChange({ from: e.target.value })} />
-          )}
+          {(p) => <Input {...p} type="date" value={filters.from} max={filters.to || undefined} onChange={(e) => onChange({ from: e.target.value })} />}
         </Field>
-        <Field label="Created to">
-          {(p) => (
-            <Input {...p} type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => onChange({ to: e.target.value })} />
-          )}
+        <Field label="Created to" hint="Includes the whole day">
+          {(p) => <Input {...p} type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => onChange({ to: e.target.value })} />}
         </Field>
-        <Field label="Sort">
+      </div>
+      <div className="mt-3 flex flex-wrap items-end gap-4">
+        <Field label="Sort" className="w-48">
           {(p) => (
             <Select {...p} value={filters.sort} onChange={(e) => onChange({ sort: e.target.value as QueueSort })}>
               <option value="urgency">Most urgent</option>
@@ -92,17 +66,6 @@ export function QueueFilters({ filters, onChange, onClear, active }: Props) {
             </Select>
           )}
         </Field>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-4">
-        <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
-            checked={filters.mine}
-            onChange={(e) => onChange({ mine: e.target.checked })}
-          />
-          Assigned to me
-        </label>
         {active && (
           <Button variant="ghost" size="sm" onClick={onClear}>
             Clear filters

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/api/endpoints';
 import { qk } from '@/api/queryKeys';
@@ -22,15 +23,12 @@ export function useAdminTicket(id: string) {
 export const useAdmins = () =>
   useQuery({ queryKey: qk.admin.admins, queryFn: adminApi.admins, staleTime: 10 * 60_000 });
 
-/** Mutation responses may omit messages/notes; keep what's already cached rather than blanking the thread. */
+/**
+ * Action endpoints return a full AdminTicket per the contract. Merging defensively keeps the cached
+ * thread if a response ever arrives without it, rather than blanking the conversation.
+ */
 function mergeDetail(prev: AdminTicket | undefined, next: AdminTicket): AdminTicket {
-  return {
-    ...prev,
-    ...next,
-    messages: next.messages ?? prev?.messages,
-    internalNotes: next.internalNotes ?? prev?.internalNotes,
-    draft: next.draft !== undefined ? next.draft : prev?.draft,
-  };
+  return prev ? { ...prev, ...next, messages: next.messages ?? prev.messages } : next;
 }
 
 function applyOptimistic(t: AdminTicket, input: UpdateTicketInput): AdminTicket {
@@ -61,11 +59,13 @@ export function useUpdateTicket(id: string) {
     onError: (_err, _input, ctx) => {
       if (ctx?.prev) qc.setQueryData(key, ctx.prev);
     },
-    onSuccess: (ticket, input) => {
+    onSuccess: (ticket, input, ctx) => {
       qc.setQueryData<AdminTicket>(key, (prev) => mergeDetail(prev, ticket));
-      // The backend drops the cached draft on a category change, since it was grounded in the old
-      // category's KB. Mark ours stale (without refetching over the admin's text) so the panel can say so.
-      if (input.category) qc.invalidateQueries({ queryKey: qk.admin.draft(id), refetchType: 'none' });
+      // Changing the category clears the server's cached draft (it was grounded in the old category),
+      // so request a new one. The panel keeps the admin's own edits and offers the new draft instead.
+      if (input.category && input.category !== ctx?.prev?.category) {
+        qc.invalidateQueries({ queryKey: qk.admin.draft(id) });
+      }
     },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.admin.lists }),
   });
@@ -82,13 +82,25 @@ export function useAssignToMe(id: string) {
   });
 }
 
+/** POST /classify → 202 with aiStatus PENDING. ticket.ai_ready (or polling) brings the result. */
+export function useRetryTriage(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => adminApi.classify(id),
+    onSuccess: (ticket) => {
+      qc.setQueryData<AdminTicket>(qk.admin.ticket(id), (prev) => mergeDetail(prev, ticket));
+      qc.invalidateQueries({ queryKey: qk.admin.lists });
+    },
+  });
+}
+
 export function useAddNote(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: string) => adminApi.addNote(id, body),
     onSuccess: (note: InternalNote) => {
       qc.setQueryData<AdminTicket>(qk.admin.ticket(id), (t) =>
-        t ? { ...t, internalNotes: [...(t.internalNotes ?? []), note] } : t,
+        t ? { ...t, internalNotes: [...t.internalNotes, note] } : t,
       );
     },
   });
@@ -109,6 +121,21 @@ export function useDraft(id: string) {
   });
 }
 
+/**
+ * The server clears its cached draft when a new author message arrives, so re-request the draft when
+ * one shows up in the thread (via SSE or polling). The first render is the baseline.
+ */
+export function useRedraftOnAuthorMessage(ticket: AdminTicket) {
+  const qc = useQueryClient();
+  const lastAuthorMessageId = ticket.messages.filter((m) => m.senderType === 'AUTHOR').at(-1)?.id ?? null;
+  const baseline = useRef(lastAuthorMessageId);
+  useEffect(() => {
+    if (lastAuthorMessageId === baseline.current) return;
+    baseline.current = lastAuthorMessageId;
+    qc.invalidateQueries({ queryKey: qk.admin.draft(ticket.id) });
+  }, [lastAuthorMessageId, qc, ticket.id]);
+}
+
 export function useRegenerateDraft(id: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -121,15 +148,17 @@ export function useSendReply(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: ReplyInput) => adminApi.reply(id, input),
-    onSuccess: (message, input) => {
+    // Async so the mutation stays pending until the refetch lands: with no status given, the server
+    // may move OPEN to IN_PROGRESS and assign the replier, and the UI should show that result.
+    onSuccess: async (message, input) => {
       qc.setQueryData<AdminTicket>(qk.admin.ticket(id), (t) =>
-        t ? { ...t, status: input.status ?? t.status, messages: [...(t.messages ?? []), message] } : t,
+        t ? { ...t, status: input.status ?? t.status, messages: [...t.messages, message] } : t,
       );
-      // The draft answered the previous state of the thread. Mark it stale without refetching, so the
-      // open editor isn't refilled now, but the next visit to this ticket asks for a fresh draft.
+      // The server drops the draft once it's answered. Mark ours stale without refetching, so the
+      // open editor isn't refilled now but the next visit asks for a fresh draft.
       qc.invalidateQueries({ queryKey: qk.admin.draft(id), refetchType: 'none' });
-      qc.invalidateQueries({ queryKey: qk.admin.ticket(id) });
       qc.invalidateQueries({ queryKey: qk.admin.lists });
+      await qc.invalidateQueries({ queryKey: qk.admin.ticket(id) });
     },
   });
 }

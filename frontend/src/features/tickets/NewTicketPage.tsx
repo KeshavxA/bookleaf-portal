@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link, useSearchParams } from 'react-router';
-import { errorMessage, fieldErrors } from '@/api/client';
 import type { Attachment, AuthorTicket } from '@/api/types';
 import { PageHeader } from '@/components/AppShell';
 import { Button } from '@/components/Button';
@@ -10,6 +9,7 @@ import { Field, Input, Select, Textarea } from '@/components/Field';
 import { Banner } from '@/components/States';
 import { useBooks } from '@/features/books/useBooks';
 import { formatTicketNumber } from '@/lib/format';
+import { applyServerErrors } from '@/lib/serverErrors';
 import { AttachmentPicker } from './AttachmentPicker';
 import { useCreateTicket } from './hooks';
 import { GENERAL_BOOK, ticketSchema, type TicketFormValues } from './schema';
@@ -48,11 +48,8 @@ function TicketForm({ initialBookId, onCreated }: { initialBookId: string; onCre
       });
       onCreated(ticket);
     } catch (e) {
-      const fields = fieldErrors(e);
-      for (const name of ['bookId', 'subject', 'description'] as const) {
-        if (fields[name]) setError(name, { message: fields[name] });
-      }
-      setError('root', { message: errorMessage(e, 'We could not submit your query. Please try again.') });
+      // Field details land on their inputs; "(root)" and attachment details become the form-level message.
+      applyServerErrors(e, setError, ['bookId', 'subject', 'description'], 'We could not submit your query. Please try again.');
     }
   };
 
@@ -60,7 +57,7 @@ function TicketForm({ initialBookId, onCreated }: { initialBookId: string; onCre
     <>
       <PageHeader title="Submit a query" description="Our support team usually replies within one business day." />
       <form onSubmit={handleSubmit(onSubmit)} noValidate className="max-w-2xl space-y-5 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        {errors.root?.message && <Banner tone="error">{errors.root.message}</Banner>}
+        {errors.root?.server?.message && <Banner tone="error">{errors.root.server.message}</Banner>}
 
         <Field
           label="Which book is this about?"

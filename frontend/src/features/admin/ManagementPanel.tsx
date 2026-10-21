@@ -7,6 +7,7 @@ import { Panel } from '@/components/Panel';
 import { Banner } from '@/components/States';
 import { useAuth } from '@/features/auth/AuthContext';
 import { formatDateTime } from '@/lib/format';
+import { errorSummary } from '@/lib/serverErrors';
 import { STATUS_LABEL } from '@/lib/labels';
 import { useAddNote, useAdmins, useAssignToMe, useUpdateTicket } from './hooks';
 
@@ -75,7 +76,7 @@ export function ManagementPanel({ ticket }: { ticket: AdminTicket }) {
 function InternalNotes({ ticket }: { ticket: AdminTicket }) {
   const [body, setBody] = useState('');
   const add = useAddNote(ticket.id);
-  const notes = ticket.internalNotes ?? [];
+  const notes = ticket.internalNotes;
   const trimmed = body.trim();
 
   return (
@@ -106,7 +107,7 @@ function InternalNotes({ ticket }: { ticket: AdminTicket }) {
           if (trimmed) add.mutate(trimmed, { onSuccess: () => setBody('') });
         }}
       >
-        {add.isError && <Banner tone="error">{errorMessage(add.error, 'The note was not saved.')}</Banner>}
+        {add.isError && <Banner tone="error">{errorSummary(add.error, 'The note was not saved.')}</Banner>}
         <Field label="Add an internal note" hideLabel>
           {(p) => (
             <Textarea

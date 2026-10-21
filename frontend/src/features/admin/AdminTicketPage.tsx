@@ -10,7 +10,9 @@ import { useChangeCue } from '@/hooks/useChangeCue';
 import { useNow } from '@/hooks/useNow';
 import { cn } from '@/lib/cn';
 import { formatAge, formatDateTime, formatTicketNumber, isOlderThanDays } from '@/lib/format';
+import { isClassifying, needsManualTriage } from '@/lib/aiState';
 import { isUnresolved } from '@/lib/labels';
+import { ClassifyingBadge, NeedsTriageBadge, Provisional } from './AiBadges';
 import { AiPanel } from './AiPanel';
 import { DraftReplyPanel } from './DraftReplyPanel';
 import { useAdminTicket } from './hooks';
@@ -24,7 +26,7 @@ export function AdminTicketPage() {
   const { data: ticket, isPending, isError, error, refetch } = useAdminTicket(id);
   const changedAt = useChangeCue(
     ticket
-      ? [ticket.status, ticket.priority, ticket.category, ticket.aiStatus, ticket.messages?.length, ticket.assignee?.id, ticket.updatedAt].join('|')
+      ? [ticket.status, ticket.priority, ticket.category, ticket.aiStatus, ticket.messages.length, ticket.assignee?.id, ticket.updatedAt].join('|')
       : undefined,
     id,
   );
@@ -69,8 +71,13 @@ function TicketLayout({ ticket, changedAt }: { ticket: AdminTicket; changedAt: n
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-slate-500">{formatTicketNumber(ticket.ticketNumber)}</span>
             <StatusBadge status={ticket.status} />
-            <PriorityBadge priority={ticket.priority} />
-            <CategoryBadge category={ticket.category} />
+            <Provisional active={isClassifying(ticket)}>
+              <PriorityBadge priority={ticket.priority} />
+            </Provisional>
+            <Provisional active={isClassifying(ticket)}>
+              <CategoryBadge category={ticket.category} />
+            </Provisional>
+            {isClassifying(ticket) ? <ClassifyingBadge /> : needsManualTriage(ticket) && <NeedsTriageBadge />}
             <UpdatedCue changedAt={changedAt} />
           </div>
           <h1 className="mt-2 text-xl font-semibold text-slate-900">{ticket.subject}</h1>
@@ -102,7 +109,7 @@ function TicketLayout({ ticket, changedAt }: { ticket: AdminTicket; changedAt: n
               createdAt: ticket.createdAt,
               attachments: ticket.attachments,
             }}
-            messages={ticket.messages ?? []}
+            messages={ticket.messages}
             emptyHint="No replies yet. The author is waiting on a first response."
           />
         </section>

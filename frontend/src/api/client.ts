@@ -1,15 +1,15 @@
 import { config } from '@/lib/config';
 import { tokenStorage } from '@/lib/tokenStorage';
-import type { ApiErrorBody, ErrorCode } from './types';
+import type { ApiErrorBody, ErrorCode, ErrorDetail } from './types';
 
 export type ClientErrorCode = ErrorCode | 'NETWORK_ERROR';
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: ClientErrorCode;
-  readonly details: unknown[];
+  readonly details: ErrorDetail[];
 
-  constructor(status: number, code: ClientErrorCode, message: string, details: unknown[] = []) {
+  constructor(status: number, code: ClientErrorCode, message: string, details: ErrorDetail[] = []) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
@@ -18,23 +18,25 @@ export class ApiError extends Error {
   }
 }
 
-/** Field-level messages from a VALIDATION_ERROR, if the backend sent them as { field|path, message }. */
-export function fieldErrors(err: unknown): Record<string, string> {
-  if (!(err instanceof ApiError) || err.code !== 'VALIDATION_ERROR') return {};
-  const out: Record<string, string> = {};
-  for (const d of err.details) {
-    if (d && typeof d === 'object' && 'message' in d) {
-      const rec = d as { field?: unknown; path?: unknown; message: unknown };
-      const key = Array.isArray(rec.path) ? rec.path.join('.') : (rec.field ?? rec.path);
-      if (typeof key === 'string' && typeof rec.message === 'string') out[key] = rec.message;
-    }
-  }
-  return out;
-}
+export const ROOT_FIELD = '(root)';
+export const RATE_LIMITED_MESSAGE = 'Too many requests, try again shortly.';
 
+export const isRateLimited = (err: unknown) =>
+  err instanceof ApiError && (err.code === 'RATE_LIMITED' || err.status === 429);
+
+/** User-facing message for any error. Rate limiting always gets the same friendly wording. */
 export function errorMessage(err: unknown, fallback = 'Something went wrong. Please try again.') {
+  if (isRateLimited(err)) return RATE_LIMITED_MESSAGE;
   if (err instanceof ApiError) return err.message || fallback;
   return fallback;
+}
+
+/** Keep only well-formed { field, message } entries; anything else is dropped rather than trusted. */
+function parseDetails(raw: unknown): ErrorDetail[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (d): d is ErrorDetail => !!d && typeof d === 'object' && typeof d.field === 'string' && typeof d.message === 'string',
+  );
 }
 
 let onUnauthorized: (() => void) | null = null;
@@ -111,9 +113,12 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
     if (res.status === 401 && token) notifyUnauthorized();
     if (isErrorBody(data)) {
       const { code, message, details } = data.error;
-      throw new ApiError(res.status, code, message, details ?? []);
+      throw new ApiError(res.status, code, message, parseDetails(details));
     }
-    throw new ApiError(res.status, res.status >= 500 ? 'INTERNAL' : 'VALIDATION_ERROR', `Request failed (${res.status})`);
+    // No contract-shaped body (e.g. a proxy error page): classify by status alone.
+    const code: ClientErrorCode =
+      res.status === 429 ? 'RATE_LIMITED' : res.status === 404 ? 'NOT_FOUND' : res.status >= 500 ? 'INTERNAL' : 'VALIDATION_ERROR';
+    throw new ApiError(res.status, code, `Request failed (${res.status})`);
   }
 
   return data as T;

@@ -1,8 +1,10 @@
 import type {
   AdminTicket,
+  AdminTicketSummary,
   AiStatus,
   Attachment,
   AuthorTicket,
+  AuthorTicketSummary,
   Book,
   Category,
   Draft,
@@ -97,9 +99,10 @@ export const findBook = (bookId: string | null) => {
   return null;
 };
 
-export function toAuthorTicket(t: MockTicket, withMessages: boolean): AuthorTicket {
+/** List projection: the "messages" key is omitted entirely, as the contract requires. */
+export function toAuthorTicketSummary(t: MockTicket): AuthorTicketSummary {
   const book = findBook(t.bookId);
-  const base: AuthorTicket = {
+  return {
     id: t.id,
     ticketNumber: t.ticketNumber,
     subject: t.subject,
@@ -110,14 +113,15 @@ export function toAuthorTicket(t: MockTicket, withMessages: boolean): AuthorTick
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
   };
-  return withMessages ? { ...base, messages: t.messages } : base;
 }
 
-export function toAdminTicket(t: MockTicket, detail: boolean): AdminTicket {
+export const toAuthorTicket = (t: MockTicket): AuthorTicket => ({ ...toAuthorTicketSummary(t), messages: t.messages });
+
+export function toAdminTicketSummary(t: MockTicket): AdminTicketSummary {
   const author = findUser(t.authorId)!;
   const assignee = t.assigneeId ? findUser(t.assigneeId) : null;
-  const ticket: AdminTicket = {
-    ...toAuthorTicket(t, detail),
+  return {
+    ...toAuthorTicketSummary(t),
     category: t.category,
     priority: t.priority,
     aiStatus: t.aiStatus,
@@ -126,9 +130,12 @@ export function toAdminTicket(t: MockTicket, detail: boolean): AdminTicket {
     priorityOverridden: t.priorityOverridden,
     author: { id: author.id, name: author.name, email: author.email },
     assignee: assignee ? { id: assignee.id, name: assignee.name } : null,
+    internalNotes: t.internalNotes,
+    draft: t.draft,
   };
-  return detail ? { ...ticket, internalNotes: t.internalNotes, draft: t.draft } : ticket;
 }
+
+export const toAdminTicket = (t: MockTicket): AdminTicket => ({ ...toAdminTicketSummary(t), messages: t.messages });
 
 // --- Event bus feeding the mock SSE stream -------------------------------------------------
 

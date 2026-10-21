@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { errorMessage } from '@/api/client';
-import { TICKET_STATUSES, type AdminTicket, type TicketStatus } from '@/api/types';
+import { TICKET_STATUSES, type AdminTicket, type Draft, type TicketStatus } from '@/api/types';
 import { Button } from '@/components/Button';
 import { Field, Select, Textarea } from '@/components/Field';
 import { Panel } from '@/components/Panel';
 import { Skeleton } from '@/components/Skeleton';
+import { Spinner } from '@/components/Spinner';
 import { Banner } from '@/components/States';
 import { useNow } from '@/hooks/useNow';
+import { needsManualTriage } from '@/lib/aiState';
 import { formatRelative } from '@/lib/format';
 import { STATUS_LABEL } from '@/lib/labels';
-import { useDraft, useRegenerateDraft, useSendReply } from './hooks';
+import { errorSummary } from '@/lib/serverErrors';
+import { useDraft, useRedraftOnAuthorMessage, useRegenerateDraft, useSendReply } from './hooks';
 
 export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
   const now = useNow();
   const draftQuery = useDraft(ticket.id);
   const regenerate = useRegenerateDraft(ticket.id);
   const send = useSendReply(ticket.id);
+  useRedraftOnAuthorMessage(ticket);
 
   const [body, setBody] = useState('');
   const [edited, setEdited] = useState(false);
@@ -27,29 +31,28 @@ export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
 
   const draft = draftQuery.data?.draft ?? null;
   const loading = draftQuery.isPending || regenerate.isPending;
+  const refreshing = draftQuery.isFetching && !draftQuery.isPending;
   const aiError = draftQuery.data?.error;
-  const unavailable = !loading && (draftQuery.isError || !draft);
+  const unavailable = !loading && !refreshing && (draftQuery.isError || !draft);
+  const hasOwnText = edited && body.trim().length > 0;
+  // A newer draft (after a category change or an author message) that we held back to protect edits.
+  const newerDraft = draft && draft.generatedAt !== appliedRef.current && hasOwnText ? draft : null;
+
+  const apply = (d: Draft) => {
+    appliedRef.current = d.generatedAt;
+    setBody(d.body);
+    setEdited(false);
+  };
 
   useEffect(() => {
-    if (!draft || appliedRef.current === draft.generatedAt) return;
-    if (edited && body.trim()) return; // never clobber the admin's own writing
-    appliedRef.current = draft.generatedAt;
-    setBody(draft.body);
-    setEdited(false);
+    if (!draft || appliedRef.current === draft.generatedAt || hasOwnText) return;
+    apply(draft);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.generatedAt]);
 
   const onRegenerate = () => {
-    if (edited && body.trim() && !window.confirm('Replace your edited reply with a new AI draft?')) return;
-    setEdited(false);
-    regenerate.mutate(undefined, {
-      onSuccess: (data) => {
-        if (data.draft) {
-          appliedRef.current = data.draft.generatedAt;
-          setBody(data.draft.body);
-        }
-      },
-    });
+    if (hasOwnText && !window.confirm('Replace your edited reply with a new AI draft?')) return;
+    regenerate.mutate(undefined, { onSuccess: (data) => data.draft && apply(data.draft) });
   };
 
   const trimmed = body.trim();
@@ -72,15 +75,17 @@ export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
     <Panel
       title="Reply to author"
       aside={
-        draft && !loading ? (
-          <span className="text-xs text-slate-500">
-            {draft.source === 'AI' ? 'AI draft' : 'Template draft'} · {formatRelative(draft.generatedAt, now)}
+        refreshing ? (
+          <span className="inline-flex items-center gap-1 text-xs text-slate-500" role="status">
+            <Spinner className="h-3 w-3" /> Updating draft…
           </span>
+        ) : draft && !loading ? (
+          <span className="text-xs text-slate-500">AI draft · {formatRelative(draft.generatedAt, now)}</span>
         ) : null
       }
     >
       <div className="space-y-3">
-        {ticket.aiStatus === 'FAILED' && (
+        {needsManualTriage(ticket) && (
           <p className="text-xs font-medium text-amber-800">⚠ This ticket needs manual triage. Check the category and priority before replying.</p>
         )}
         {unavailable && (
@@ -93,16 +98,21 @@ export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
             )}
           </Banner>
         )}
-        {draft?.source === 'FALLBACK' && !loading && (
-          <Banner tone="info">AI was unavailable, so this is a template. Personalise it before sending.</Banner>
-        )}
-        {draft && !loading && draftQuery.isStale && (
-          <p className="text-xs text-slate-600">The ticket's category changed. Regenerate to get a draft based on the new category.</p>
+        {newerDraft && (
+          <Banner tone="info">
+            A new AI draft is available, based on the latest changes to this ticket.{' '}
+            <button type="button" className="font-medium underline hover:no-underline" onClick={() => apply(newerDraft)}>
+              Replace my text with it
+            </button>
+          </Banner>
         )}
         {regenerate.isError && <Banner tone="error">{errorMessage(regenerate.error, 'Could not regenerate the draft.')}</Banner>}
-        {send.isError && <Banner tone="error">{errorMessage(send.error, 'Your reply was not sent.')} Your text is still here.</Banner>}
+        {send.isError && <Banner tone="error">{errorSummary(send.error, 'Your reply was not sent.')} Your text is still here.</Banner>}
         {sentAt && now - sentAt < 60_000 && !send.isPending && (
-          <Banner tone="success">Reply sent. {ticket.author.name} can see it now.</Banner>
+          <Banner tone="success">
+            Reply sent. {ticket.author.name} can see it now. Status: {STATUS_LABEL[ticket.status]}
+            {ticket.assignee ? ` · Assigned to ${ticket.assignee.name}` : ''}.
+          </Banner>
         )}
 
         {loading ? (
@@ -136,7 +146,7 @@ export function DraftReplyPanel({ ticket }: { ticket: AdminTicket }) {
           <Field label="Set status on send" className="min-w-40 flex-1">
             {(p) => (
               <Select {...p} value={statusOnSend} disabled={send.isPending} onChange={(e) => setStatusOnSend(e.target.value as TicketStatus | '')}>
-                {/* The backend moves OPEN to IN_PROGRESS on reply when no status is given. */}
+                {/* Per the contract, no status means OPEN moves to IN_PROGRESS and an unassigned ticket goes to you. */}
                 <option value="">
                   {ticket.status === 'OPEN' ? 'Default (moves to In Progress)' : `Keep as ${STATUS_LABEL[ticket.status]}`}
                 </option>

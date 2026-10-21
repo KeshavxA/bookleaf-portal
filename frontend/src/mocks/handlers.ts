@@ -5,6 +5,7 @@ import {
   TICKET_STATUSES,
   type Category,
   type ErrorCode,
+  type ErrorDetail,
   type Priority,
   type Role,
   type TicketEventType,
@@ -23,7 +24,9 @@ import {
   persist,
   subscribe,
   toAdminTicket,
+  toAdminTicketSummary,
   toAuthorTicket,
+  toAuthorTicketSummary,
   touch,
   type MockTicket,
   type MockUser,
@@ -34,8 +37,22 @@ const PASSWORD = 'Passw0rd!';
 const AI_DELAY_MS = 2500;
 const AUTO_REPLY_DELAY_MS = 15_000;
 
-const fail = (status: number, code: ErrorCode, message: string, details: unknown[] = []) =>
+const fail = (status: number, code: ErrorCode, message: string, details: ErrorDetail[] = []) =>
   HttpResponse.json({ error: { code, message, details } }, { status });
+
+// AI endpoints (draft, classify) are rate limited per user, like the backend's defaults (20 per minute).
+const AI_LIMIT = 20;
+const AI_WINDOW_MS = 60_000;
+const aiCalls = new Map<string, number[]>();
+
+function aiRateLimited(user: MockUser) {
+  const now = Date.now();
+  const recent = (aiCalls.get(user.id) ?? []).filter((t) => now - t < AI_WINDOW_MS);
+  const limited = recent.length >= AI_LIMIT;
+  if (!limited) recent.push(now);
+  aiCalls.set(user.id, recent);
+  return limited ? fail(429, 'RATE_LIMITED', 'Too many AI requests. Please wait a moment.') : null;
+}
 
 const tokenFor = (u: MockUser) => `mock.${u.id}`;
 
@@ -69,18 +86,40 @@ function setAndEmit(t: MockTicket, type: TicketEventType) {
   emit(type, t);
 }
 
-/** Simulates the backend's async classification job finishing a few seconds after creation. */
+/**
+ * Simulates the backend's async classification job (on creation, or on retry via /classify).
+ * While it runs, category/priority hold provisional keyword values. Fields the admin has overridden
+ * are never overwritten. With VITE_MOCK_AI_DOWN the job fails and the keyword values stay.
+ */
 function scheduleClassification(t: MockTicket) {
   setTimeout(() => {
     const ticket = db.tickets.find((x) => x.id === t.id);
     if (!ticket || ticket.aiStatus !== 'PENDING') return;
-    const result = classify(ticket);
-    ticket.aiSuggestion = result;
-    ticket.aiStatus = 'DONE';
-    if (!ticket.categoryOverridden) ticket.category = result.category;
-    if (!ticket.priorityOverridden) ticket.priority = result.priority;
+    if (config.mockAiDown) {
+      ticket.aiStatus = 'FAILED';
+    } else {
+      const result = classify(ticket);
+      ticket.aiSuggestion = result;
+      ticket.aiStatus = 'DONE';
+      if (!ticket.categoryOverridden) ticket.category = result.category;
+      if (!ticket.priorityOverridden) ticket.priority = result.priority;
+    }
     setAndEmit(ticket, 'ticket.ai_ready');
   }, AI_DELAY_MS);
+}
+
+const csv = <T extends string>(value: string | null, allowed: readonly T[]) =>
+  value ? value.split(',').map((v) => v.trim()).filter((v): v is T => (allowed as readonly string[]).includes(v)) : [];
+
+const BARE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Mirrors the backend: dates parse as ISO (bare dates are UTC midnight); a bare "to" runs to the end of that UTC day. */
+function dateParam(value: string | null, endOfDay: boolean) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return undefined;
+  if (endOfDay && BARE_DATE.test(value)) d.setUTCHours(23, 59, 59, 999);
+  return d.getTime();
 }
 
 /**
@@ -163,7 +202,7 @@ export const handlers = [
     const mine = db.tickets
       .filter((t) => t.authorId === user.id)
       .sort((a, b) => time(b.createdAt) - time(a.createdAt))
-      .map((t) => toAuthorTicket(t, false));
+      .map((t) => toAuthorTicketSummary(t));
     return HttpResponse.json(mine);
   }),
 
@@ -172,22 +211,29 @@ export const handlers = [
     if (user instanceof Response) return user;
     await delay(500);
     const body = await readJson(request);
+    if (Object.keys(body).length === 0)
+      return fail(400, 'VALIDATION_ERROR', 'Request body must be a JSON object', [
+        { field: '(root)', message: 'Request body must be a JSON object' },
+      ]);
     const subject = str(body.subject);
     const description = str(body.description);
     const bookId = body.bookId == null ? null : String(body.bookId);
-    const details: { field: string; message: string }[] = [];
+    const details: ErrorDetail[] = [];
     if (subject.length < 3 || subject.length > 120) details.push({ field: 'subject', message: 'Subject must be 3-120 characters' });
     if (description.length < 10 || description.length > 5000)
       details.push({ field: 'description', message: 'Description must be 10-5000 characters' });
     if (bookId && !(db.books[user.id] ?? []).some((b) => b.id === bookId))
       details.push({ field: 'bookId', message: 'Book not found on your account' });
-    if (details.length) return fail(400, 'VALIDATION_ERROR', 'Please fix the highlighted fields', details);
+    const rawAttachments = Array.isArray(body.attachments) ? (body.attachments as { name?: unknown; size?: unknown }[]) : [];
+    rawAttachments.forEach((a, i) => {
+      if (typeof a?.name !== 'string' || !a.name.trim()) details.push({ field: `attachments.${i}.name`, message: 'Name is required' });
+      if (typeof a?.size !== 'number' || a.size < 0 || a.size > 10 * 1024 * 1024)
+        details.push({ field: `attachments.${i}.size`, message: 'Size must be between 0 and 10 MB' });
+    });
+    if (details.length) return fail(400, 'VALIDATION_ERROR', 'Request validation failed', details);
 
-    const attachments = Array.isArray(body.attachments)
-      ? (body.attachments as { name?: unknown; size?: unknown }[])
-          .filter((a) => typeof a?.name === 'string' && typeof a?.size === 'number')
-          .map((a) => ({ name: a.name as string, size: a.size as number }))
-      : [];
+    const attachments = rawAttachments.map((a) => ({ name: a.name as string, size: a.size as number }));
+    const provisional = classify({ subject, description }); // keyword guess until the AI job finishes
     const createdAt = nowIso();
     const n = 1001 + db.tickets.length;
     const ticket: MockTicket = {
@@ -202,8 +248,8 @@ export const handlers = [
       messages: [],
       createdAt,
       updatedAt: createdAt,
-      category: 'GENERAL_INQUIRY',
-      priority: 'MEDIUM',
+      category: provisional.category,
+      priority: provisional.priority,
       aiStatus: 'PENDING',
       aiSuggestion: null,
       categoryOverridden: false,
@@ -217,7 +263,7 @@ export const handlers = [
     emit('ticket.created', ticket);
     scheduleClassification(ticket);
     scheduleAutoReply(ticket);
-    return HttpResponse.json(toAuthorTicket(ticket, true), { status: 201 });
+    return HttpResponse.json(toAuthorTicket(ticket), { status: 201 });
   }),
 
   http.get(`${base}/tickets/:id`, async ({ request, params }) => {
@@ -225,7 +271,7 @@ export const handlers = [
     if (user instanceof Response) return user;
     await delay(250);
     const t = findTicketFor(user, String(params.id));
-    return t ? HttpResponse.json(toAuthorTicket(t, true)) : fail(404, 'NOT_FOUND', 'Ticket not found');
+    return t ? HttpResponse.json(toAuthorTicket(t)) : fail(404, 'NOT_FOUND', 'Ticket not found');
   }),
 
   http.post(`${base}/tickets/:id/messages`, async ({ request, params }) => {
@@ -233,12 +279,13 @@ export const handlers = [
     if (user instanceof Response) return user;
     const t = findTicketFor(user, String(params.id));
     if (!t) return fail(404, 'NOT_FOUND', 'Ticket not found');
-    if (t.status === 'CLOSED') return fail(409, 'CONFLICT', 'This ticket is closed');
+    if (t.status === 'CLOSED') return fail(409, 'CONFLICT', 'This ticket is closed and can no longer receive replies.');
     const text = str((await readJson(request)).body);
     if (!text) return fail(400, 'VALIDATION_ERROR', 'Message cannot be empty', [{ field: 'body', message: 'Required' }]);
     const message = { id: nextId('m'), senderType: 'AUTHOR' as const, senderName: user.name, body: text, createdAt: nowIso() };
     t.messages.push(message);
     if (t.status === 'RESOLVED') t.status = 'OPEN';
+    t.draft = null; // a new author message invalidates the cached draft
     setAndEmit(t, 'ticket.message');
     return HttpResponse.json(message, { status: 201 });
   }),
@@ -250,15 +297,26 @@ export const handlers = [
     await delay(300);
     const p = new URL(request.url).searchParams;
     const q = (p.get('q') ?? '').trim().toLowerCase();
-    const from = p.get('from');
-    const to = p.get('to');
+    const statuses = csv(p.get('status'), TICKET_STATUSES);
+    const categories = csv(p.get('category'), CATEGORIES);
+    const priorities = csv(p.get('priority'), PRIORITIES);
+    const assignee = p.get('assigneeId');
+    const from = dateParam(p.get('from'), false);
+    const to = dateParam(p.get('to'), true);
+    if (from === undefined || to === undefined)
+      return fail(400, 'VALIDATION_ERROR', 'Request validation failed', [
+        ...(from === undefined ? [{ field: 'from', message: 'Must be an ISO 8601 date' }] : []),
+        ...(to === undefined ? [{ field: 'to', message: 'Must be an ISO 8601 date' }] : []),
+      ]);
     let list = db.tickets.filter((t) => {
-      if (p.get('status') && t.status !== p.get('status')) return false;
-      if (p.get('category') && t.category !== p.get('category')) return false;
-      if (p.get('priority') && t.priority !== p.get('priority')) return false;
-      if (p.get('assigneeId') && t.assigneeId !== p.get('assigneeId')) return false;
-      if (from && time(t.createdAt) < time(from)) return false;
-      if (to && time(t.createdAt) > time(to)) return false;
+      if (statuses.length && !statuses.includes(t.status)) return false;
+      if (categories.length && !categories.includes(t.category)) return false;
+      if (priorities.length && !priorities.includes(t.priority)) return false;
+      if (assignee === 'unassigned' && t.assigneeId) return false;
+      if (assignee === 'me' && t.assigneeId !== user.id) return false;
+      if (assignee && assignee !== 'me' && assignee !== 'unassigned' && t.assigneeId !== assignee) return false;
+      if (from && time(t.createdAt) < from) return false;
+      if (to && time(t.createdAt) > to) return false;
       if (q) {
         const author = findUser(t.authorId);
         const hay = [`#${t.ticketNumber}`, t.subject, t.description, author?.name, author?.email, findBook(t.bookId)?.title]
@@ -279,7 +337,7 @@ export const handlers = [
     const page = Math.max(1, Number(p.get('page')) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(p.get('pageSize')) || 20));
     return HttpResponse.json({
-      items: list.slice((page - 1) * pageSize, page * pageSize).map((t) => toAdminTicket(t, false)),
+      items: list.slice((page - 1) * pageSize, page * pageSize).map((t) => toAdminTicketSummary(t)),
       total: list.length,
       page,
       pageSize,
@@ -291,7 +349,7 @@ export const handlers = [
     if (user instanceof Response) return user;
     await delay(250);
     const t = findTicketFor(user, String(params.id));
-    return t ? HttpResponse.json(toAdminTicket(t, true)) : fail(404, 'NOT_FOUND', 'Ticket not found');
+    return t ? HttpResponse.json(toAdminTicket(t)) : fail(404, 'NOT_FOUND', 'Ticket not found');
   }),
 
   http.patch(`${base}/admin/tickets/:id`, async ({ request, params }) => {
@@ -301,7 +359,7 @@ export const handlers = [
     const t = findTicketFor(user, String(params.id));
     if (!t) return fail(404, 'NOT_FOUND', 'Ticket not found');
     const body = await readJson(request);
-    const details: { field: string; message: string }[] = [];
+    const details: ErrorDetail[] = [];
     if (body.status !== undefined && !TICKET_STATUSES.includes(body.status as TicketStatus))
       details.push({ field: 'status', message: 'Invalid status' });
     if (body.category !== undefined && !CATEGORIES.includes(body.category as Category))
@@ -326,7 +384,7 @@ export const handlers = [
     }
     if (body.assigneeId !== undefined) t.assigneeId = body.assigneeId == null ? null : String(body.assigneeId);
     setAndEmit(t, 'ticket.updated');
-    return HttpResponse.json(toAdminTicket(t, true));
+    return HttpResponse.json(toAdminTicket(t));
   }),
 
   http.post(`${base}/admin/tickets/:id/assign-to-me`, async ({ request, params }) => {
@@ -337,7 +395,7 @@ export const handlers = [
     if (!t) return fail(404, 'NOT_FOUND', 'Ticket not found');
     t.assigneeId = user.id;
     setAndEmit(t, 'ticket.updated');
-    return HttpResponse.json(toAdminTicket(t, true));
+    return HttpResponse.json(toAdminTicket(t));
   }),
 
   http.post(`${base}/admin/tickets/:id/notes`, async ({ request, params }) => {
@@ -354,11 +412,27 @@ export const handlers = [
     return HttpResponse.json(note, { status: 201 });
   }),
 
+  http.post(`${base}/admin/tickets/:id/classify`, async ({ request, params }) => {
+    const user = guard(request, 'ADMIN');
+    if (user instanceof Response) return user;
+    const t = findTicketFor(user, String(params.id));
+    if (!t) return fail(404, 'NOT_FOUND', 'Ticket not found');
+    const limited = aiRateLimited(user);
+    if (limited) return limited;
+    await delay(250);
+    t.aiStatus = 'PENDING';
+    setAndEmit(t, 'ticket.updated');
+    scheduleClassification(t);
+    return HttpResponse.json(toAdminTicket(t), { status: 202 });
+  }),
+
   http.post(`${base}/admin/tickets/:id/draft`, async ({ request, params }) => {
     const user = guard(request, 'ADMIN');
     if (user instanceof Response) return user;
     const t = findTicketFor(user, String(params.id));
     if (!t) return fail(404, 'NOT_FOUND', 'Ticket not found');
+    const limited = aiRateLimited(user);
+    if (limited) return limited;
     const { regenerate } = await readJson(request);
     if (t.draft && !regenerate) {
       await delay(150);
@@ -394,7 +468,7 @@ export const handlers = [
     if (body.status) t.status = body.status as TicketStatus;
     else if (t.status === 'OPEN') t.status = 'IN_PROGRESS';
     if (!t.assigneeId) t.assigneeId = user.id;
-    t.draft = null; // the draft has been used; the next open generates a fresh one
+    t.draft = null; // backend behaviour (not in the contract): a reply clears the draft it answered
     setAndEmit(t, 'ticket.message');
     return HttpResponse.json(message, { status: 201 });
   }),

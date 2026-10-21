@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ApiError } from '@/api/client';
 import { authorApi } from '@/api/endpoints';
 import { qk } from '@/api/queryKeys';
 import type { AuthorTicket, CreateTicketInput } from '@/api/types';
@@ -30,11 +31,13 @@ export function useAddFollowUp(ticketId: string) {
   return useMutation({
     mutationFn: (body: string) => authorApi.addMessage(ticketId, body),
     onSuccess: (message) => {
-      // Append immediately from the server response, then reconcile with a refetch.
-      qc.setQueryData<AuthorTicket>(qk.ticket(ticketId), (t) =>
-        t ? { ...t, messages: [...(t.messages ?? []), message] } : t,
-      );
+      // Append immediately from the server response, then refetch: a follow-up on a RESOLVED ticket reopens it.
+      qc.setQueryData<AuthorTicket>(qk.ticket(ticketId), (t) => (t ? { ...t, messages: [...t.messages, message] } : t));
       qc.invalidateQueries({ queryKey: qk.tickets });
+    },
+    onError: (err) => {
+      // 409: the ticket was closed meanwhile. Refetch so the page shows the closed state.
+      if (err instanceof ApiError && err.code === 'CONFLICT') qc.invalidateQueries({ queryKey: qk.tickets });
     },
   });
 }
