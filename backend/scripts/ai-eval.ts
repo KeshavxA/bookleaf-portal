@@ -206,7 +206,8 @@ async function main() {
     if (calls++ > 0 && delayMs > 0) await sleep(delayMs);
   };
   console.log(
-    `Provider: ${cfg.LLM_PROVIDER}   Model: ${cfg.LLM_MODEL}   Cases: ${cases.length}   Drafts: ${withDraft ? "yes" : "no"}   Pause between calls: ${delayMs}ms`,
+    `Provider: ${cfg.LLM_PROVIDER}   Model: ${cfg.LLM_MODEL}   Timeout: ${cfg.LLM_TIMEOUT_MS}ms   Cases: ${cases.length}   ` +
+      `Drafts: ${withDraft ? "yes" : "no"}   Pause between calls: ${delayMs}ms`,
   );
   const classifier = new TicketClassifier(llm);
   const drafter = new TicketDrafter(llm);
