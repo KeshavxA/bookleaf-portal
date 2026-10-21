@@ -1,14 +1,26 @@
-# Render Blueprint: API (Docker) + managed Postgres. Set ANTHROPIC_API_KEY and CORS_ORIGINS in the dashboard.
+# Render Blueprint: Node web service + managed Postgres. NOT YET DEPLOYED - see README "Deploying".
+# Dashboard: New > Blueprint > this repo, Blueprint path backend/render.yaml.
+# You will be prompted for ANTHROPIC_API_KEY (optional) and CORS_ORIGINS (the frontend URL).
 services:
   - type: web
     name: bookleaf-api
-    runtime: docker
+    runtime: node
+    plan: free
     rootDir: backend
-    dockerfilePath: ./Dockerfile
+    # install (dev deps needed for tsc), prisma generate, tsc + copy KB files
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+    # prisma migrate deploy, idempotent seed (+ demo tickets when SEED_DEMO_TICKETS=true), then the server
+    startCommand: npm run start:prod
     healthCheckPath: /health
     envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
-        fromDatabase: { name: bookleaf-db, property: connectionString }
+        fromDatabase:
+          name: bookleaf-db
+          property: connectionString
       - key: JWT_SECRET
         generateValue: true
       - key: ANTHROPIC_API_KEY
@@ -17,6 +29,11 @@ services:
         sync: false
       - key: LLM_MODEL
         value: claude-haiku-5-5
+      - key: SEED_DEMO_TICKETS
+        value: "true"
+
 databases:
   - name: bookleaf-db
     plan: free
+    databaseName: bookleaf
+    user: bookleaf
