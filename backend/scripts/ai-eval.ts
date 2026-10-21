@@ -1,18 +1,24 @@
 /**
- * Manual-review eval for the AI pipeline: `npm run ai:eval [-- --no-draft] [-- --only=3]`
+ * Manual-review eval for the AI pipeline:
+ *   npm run ai:eval [-- --no-draft] [-- --only=3] [-- --delay-ms=4000]
  *
  * Runs ~12 tickets (the KB's sample queries plus edge cases) through the real
- * classifier and drafter against the configured model, using facts built from
- * the seed dataset. Prints expected vs actual triage, the draft, and token cost.
- * No database needed. Requires ANTHROPIC_API_KEY.
+ * classifier and drafter of the configured provider (LLM_PROVIDER / LLM_MODEL),
+ * using facts built from the seed dataset. Prints expected vs actual triage, the
+ * draft, and token cost. No database needed. Requires the selected provider's key.
+ *
+ * A failed call (rate limit, quota, timeout) is reported for that ticket and the
+ * run continues. A pause between calls keeps a free-tier key under its per-minute
+ * limit: --delay-ms, else AI_EVAL_DELAY_MS, else 4000ms for gemini and 0 for anthropic.
  */
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LlmClient } from "../src/ai/llm/client";
 import { CircuitBreaker } from "../src/ai/llm/circuitBreaker";
-import { AnthropicProvider } from "../src/ai/llm/providers/anthropic";
-import type { AiCallRecord } from "../src/ai/llm/types";
+import { apiKeyVarFor, createLlmProvider, selectedApiKey } from "../src/ai/llm/providers";
+import { LlmError, type AiCallRecord } from "../src/ai/llm/types";
+import { ConfigError, parseEnv } from "../src/config/schema";
 import { TicketClassifier } from "../src/ai/classifier/classifier";
 import { TicketDrafter } from "../src/ai/drafter/drafter";
 import type { DraftBookInput, DraftContext } from "../src/ai/drafter/types";
@@ -152,25 +158,51 @@ function toBook(b: Record<string, unknown>): DraftBookInput {
   };
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Same validation as the server; the eval needs no database, so a placeholder URL is fine. */
+function loadConfig() {
+  try {
+    return parseEnv({ DATABASE_URL: "postgresql://unused/eval", ...process.env });
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+
 async function main() {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error("ANTHROPIC_API_KEY is not set. Add it to backend/.env to run the eval.");
+  const cfg = loadConfig();
+  if (!selectedApiKey(cfg)) {
+    console.error(`${apiKeyVarFor(cfg.LLM_PROVIDER)} is not set (LLM_PROVIDER=${cfg.LLM_PROVIDER}). Add it to backend/.env to run the eval.`);
     process.exit(1);
   }
   const args = process.argv.slice(2);
   const withDraft = !args.includes("--no-draft");
   const only = args.find((a) => a.startsWith("--only="))?.split("=")[1];
   const cases = only ? CASES.filter((_, i) => String(i + 1) === only) : CASES;
+  const delayArg = args.find((a) => a.startsWith("--delay-ms="))?.split("=")[1] ?? process.env.AI_EVAL_DELAY_MS;
+  const delayMs = delayArg !== undefined ? Math.max(0, Number(delayArg) || 0) : cfg.LLM_PROVIDER === "gemini" ? 4000 : 0;
 
   const records: AiCallRecord[] = [];
   const llm = new LlmClient({
-    provider: new AnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.LLM_MODEL ?? "claude-haiku-5-5" }),
-    timeoutMs: Number(process.env.LLM_TIMEOUT_MS ?? 15_000),
-    maxRetries: 2,
-    breaker: new CircuitBreaker({ threshold: 5, cooldownMs: 30_000 }),
+    provider: createLlmProvider(cfg),
+    timeoutMs: cfg.LLM_TIMEOUT_MS,
+    maxRetries: cfg.LLM_MAX_RETRIES,
+    breaker: new CircuitBreaker({ threshold: cfg.LLM_BREAKER_THRESHOLD, cooldownMs: cfg.LLM_BREAKER_COOLDOWN_MS }),
     recorder: { record: async (r) => void records.push(r) },
     onWarn: (msg, ctx) => console.warn(`  ! ${msg}`, ctx),
   });
+  let calls = 0;
+  /** Pause before every call except the first, to stay under per-minute limits. */
+  const pace = async () => {
+    if (calls++ > 0 && delayMs > 0) await sleep(delayMs);
+  };
+  console.log(
+    `Provider: ${cfg.LLM_PROVIDER}   Model: ${cfg.LLM_MODEL}   Cases: ${cases.length}   Drafts: ${withDraft ? "yes" : "no"}   Pause between calls: ${delayMs}ms`,
+  );
   const classifier = new TicketClassifier(llm);
   const drafter = new TicketDrafter(llm);
 
@@ -187,6 +219,7 @@ async function main() {
     console.log(`Author: ${author.name} | Book: ${book ? `${book.title} (${book.status})` : "none"}`);
     console.log(`Subject: ${c.subject}\n${c.description}\n`);
 
+    await pace();
     const result = await classifier.classify(
       { subject: c.subject, description: c.description, book: book && { title: book.title, status: book.status } },
       `eval-${i + 1}`,
@@ -201,7 +234,12 @@ async function main() {
         `[${result.source}]`,
     );
     if (result.source === "AI") console.log(`Reasoning: ${result.suggestion.reasoning}`);
-    else console.log(`Fallback because: ${result.errorCode} ${result.errorMessage}`);
+    else {
+      console.log(`Fallback because: ${result.errorCode} ${result.errorMessage}`);
+      if (result.errorCode === "RATE_LIMITED" || result.errorCode === "CIRCUIT_OPEN") {
+        console.log("  (rate limit or quota: this ticket used the keyword fallback; the run continues)");
+      }
+    }
 
     if (!withDraft) continue;
     const ctx: DraftContext = {
@@ -222,13 +260,16 @@ async function main() {
       book,
       thread: [],
     };
+    await pace();
     try {
       const draft = await drafter.draft(ctx);
       const words = draft.body.split(/\s+/).length;
       console.log(`\nDraft (${words} words):\n${draft.body}`);
       if (draft.ungroundedNumbers.length) console.log(`⚠ numbers not found in sources: ${draft.ungroundedNumbers.join(", ")}`);
     } catch (err) {
-      console.log(`\nDraft failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Per-ticket failure (rate limit, quota, timeout, bad output): report it and keep going.
+      const code = err instanceof LlmError ? `${err.code}: ` : "";
+      console.log(`\nDraft failed: ${code}${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -240,16 +281,20 @@ async function main() {
     return rs.length ? Math.round(rs.reduce((n, r) => n + r.latencyMs, 0) / rs.length) : 0;
   };
 
-  console.log(`\n${line}\nSUMMARY (${llm.model})\n${line}`);
+  console.log(`\n${line}\nSUMMARY (${cfg.LLM_PROVIDER} / ${llm.model})\n${line}`);
   console.log(`Category correct: ${correctCategory}/${cases.length}   Priority acceptable: ${acceptablePriority}/${cases.length}`);
+  const byStatus = records.reduce<Record<string, number>>((m, r) => ({ ...m, [r.status]: (m[r.status] ?? 0) + 1 }), {});
   console.log(
-    `Calls: ${records.length} (${records.filter((r) => r.status !== "SUCCESS").length} failed)   ` +
+    `Calls: ${records.length} ${JSON.stringify(byStatus)}   ` +
       `avg latency classify ${avgLatency("CLASSIFY")}ms, draft ${avgLatency("DRAFT")}ms`,
   );
   console.log(
     `Tokens: in ${sum("inputTokens")}, out ${sum("outputTokens")}, cache read ${sum("cacheReadTokens")}, cache write ${sum("cacheWriteTokens")}`,
   );
-  console.log(`Estimated cost: $${cost.toFixed(5)} (≈ $${(cost / cases.length).toFixed(5)} per ticket)`);
+  console.log(
+    `Estimated cost: $${cost.toFixed(5)} (≈ $${(cost / cases.length).toFixed(5)} per ticket)` +
+      (cfg.LLM_PROVIDER === "gemini" && cost === 0 ? "  [GEMINI_PRICE_* = 0: free-tier default, not a real price]" : ""),
+  );
 }
 
 main().catch((err) => {
