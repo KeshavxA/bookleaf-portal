@@ -8,7 +8,7 @@ import type { EventBus } from "../realtime/eventBus";
 
 export interface DraftDto {
   body: string;
-  source: "AI" | "FALLBACK";
+  source: "AI";
   generatedAt: string;
 }
 

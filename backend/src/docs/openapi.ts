@@ -100,7 +100,7 @@ const schemas = {
     type: "object",
     properties: {
       body: { type: "string" },
-      source: { type: "string", enum: ["AI", "FALLBACK"] },
+      source: { type: "string", enum: ["AI"] },
       generatedAt: { type: "string", format: "date-time" },
     },
   },
