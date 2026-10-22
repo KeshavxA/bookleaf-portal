@@ -462,9 +462,52 @@ naming a book the author didn't mention, a problem first seen in run 1 (#9). Thr
 "no roll-over date" check, the `records`, `breakdown`, `sorry-wait` and `kb-only` points, and the narrower `bank` and
 `date` points.
 
-> **No eval has been run since the third draft quality pass.** Whether these fixes work on the model is unverified.
-> The per-ticket table from run 3 isn't recorded here. The table below is from run 2 and uses the old checks,
-> including a length pass/fail that no longer exists.
+**Run 4** (Gemini, `gemini-3.5-flash-lite`, free tier, 30 s timeout, 6 s pause between calls), the first run after the
+third draft quality pass. This is **one run, not a scored eval**.
+
+Totals:
+- 24/24 calls succeeded
+- categories 12/12, priorities 12/12
+- average 3.4 s per classification and 3.2 s per draft
+- tokens 26,269 in, 1,971 out, 0 cached
+- estimated cost about **$0.013 for the 24 calls** (12 tickets), at the paid list price of $0.30 / $2.50 per million
+  input / output tokens. That's an estimate from the prices in these docs, not a measured bill; the run itself used
+  the free tier
+
+Draft checks:
+- **required points:** 11 pass, 1 fail. The failure is the weak `channels` keyword test on the account-level bio
+  ticket. Its draft offers the dashboard and a reply route but never uses the word "email".
+- **bank once:** 12 pass
+- **no roll-over date:** pass on the roll-over ticket
+- **dates:** 12 pass
+- **numbers grounded:** 12 pass
+
+Improved since run 3 (from reading the drafts):
+- the roll-over ticket gives no payout date
+- the "too low" ticket states our records, offers a breakdown, and no longer asks a paid author for bank details
+- the repeated-contact tickets include an apology
+- the co-author question says the team will confirm within 48 hours
+- the account-level ticket names no book
+
+Remaining weaknesses (from reading the drafts; the automated checks miss all of them):
+- **(a)** Two general drafts say the author can reply to the message and the team will submit the update. The KB
+  doesn't say that; it names the dashboard and emailing the team.
+- **(b)** The "too low" draft doesn't set the author's 200 copies against our 156. It also says a 14 Nov payout will
+  cover Jul–Sep 2026, although nothing is pending.
+- **(c)** A typesetting draft says it "has taken longer than usual", a claim the KB has no figure for.
+- **(d)** The co-author draft adds the publication date unprompted.
+- **(e)** Drafts promise internal actions ("escalated", "re-sync requested") that an admin must make true before
+  sending.
+- **(f)** Some drafts are under 80 words, which is information only, not a failure.
+
+Timeouts across the four Gemini runs were 1/24, 8/24, 0/24 and 0/24. Free-tier reliability varies, and four runs are
+not a scored eval. **Anthropic is still untested against the real API.**
+
+**The production design relies on an admin reading and editing every draft before it is sent.** Weaknesses (a)–(e)
+are the kind of thing that review exists to catch. Nothing the model writes reaches an author without that step.
+
+> **No eval has been run since run 4.** The per-ticket tables from runs 3 and 4 aren't recorded here. The table below
+> is from run 2 and uses the old checks, including a length pass/fail that no longer exists.
 
 Second Gemini run (2026-10-21, `gemini-3.5-flash-lite`, free tier, 30 s timeout), after the first draft quality
 pass, with the old check set:
@@ -561,7 +604,7 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 | Unit + integration tests (144) | ✅ verified | `npm test` against local PostgreSQL 14, Node 22. Both providers are covered with fake SDK transports |
 | Production build and start sequence | ✅ verified locally | `npm run build`, then `npm run start:prod` with `NODE_ENV=production` on a fresh empty database: both migrations applied, seed and 8 demo tickets created, `/health` ok, admin login and queue in urgency order. A second start created 0 demo tickets. The placeholder `JWT_SECRET` was refused, and the generated secret did not appear in the logs |
 | **Anthropic API** (classification, drafts, prompt caching, token and cost figures) | ❌ **not run against the real API** | No Anthropic key was available. The Anthropic path has only run against a fake SDK transport. The Haiku cost figures in this README are estimates |
-| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval). **Run 3** (after the second draft quality pass): 24/24 calls succeeded, categories 12/12, priorities 12/12, ~5.6 s classify / ~5.0 s draft; reading the drafts found five problems. **The third draft quality pass has not been run against the API** |
+| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: four manual `ai:eval` runs, 2026-10-21/22 (each one run, not a scored eval) | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval). **Run 3** (after the second draft quality pass): 24/24 calls succeeded, categories 12/12, priorities 12/12, ~5.6 s classify / ~5.0 s draft; reading the drafts found five problems. **Run 4** (after the third pass): 24/24 calls succeeded, 12/12 categories, 12/12 priorities, 3.4 s / 3.2 s, required points 11/12, all other draft checks pass; remaining weaknesses in [AI eval](#ai-eval-npm-run-aieval). Every draft still needs admin review |
 | Gemini rate-limit, quota-exhausted and invalid-key handling against the live API | ❌ not verified | Not triggered in the real run; covered only with a fake SDK |
 | Docker image build | ❌ not verified | Docker not installed; the `Dockerfile` has never been built |
 | Render deploy (`render.yaml`) | ❌ not verified | Blueprint not applied yet |

@@ -7,15 +7,17 @@ default), or a Gemini model set in `LLM_MODEL`. Nothing the model produces reach
 choosing to send it.
 
 > **Status (2026-10-22):** the **Anthropic path has not been run against the real API**; it has only been tested
-> with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had three manual
+> with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had four manual
 > `npm run ai:eval` runs** on `gemini-3.5-flash-lite` (free tier):
 > - Run 1: category 12/12, priority 11/12, and 1 of 24 calls timed out.
 > - Run 2: 8 of 24 calls timed out.
 > - Run 3, after the second draft quality pass: 24/24 calls succeeded, category 12/12, priority 12/12. Reading the
 >   drafts found five problems.
+> - Run 4, after the third pass: 24/24 calls succeeded, category 12/12, priority 12/12, required points 11/12, and
+>   all other draft checks pass. Reading the drafts still finds weaknesses; see "Gemini eval run 4".
 >
-> Each is a single unscored run, not an eval. **The third draft quality pass has not been run against any model
-> yet**; see "Draft quality pass 3" below.
+> Each is one run, not a scored eval. **The production design relies on an admin reading and editing every draft
+> before it is sent.**
 
 ## Prompt strategy
 
@@ -279,7 +281,7 @@ Reading the drafts found **five problems the automated checks didn't catch**:
 4. **Not owning the wait.** Authors who said they had written before, or got no reply, got no apology for the wait.
 5. **Outside the KB.** A draft said "yes, you can" to adding a co-author, which the KB doesn't cover.
 
-### Draft quality pass 3 (not yet evaluated)
+### Draft quality pass 3 (evaluated by run 4)
 
 Code and prompt changes only; **no model has been run on them**. Each change maps to a problem above:
 
@@ -303,6 +305,66 @@ title the author named. The focus note says not to name a book.
 
 Every rule and keyword test is pinned by unit tests (`tests/unit/draftPass3.test.ts`) using the dataset rows the
 problems were seen on.
+
+### Gemini eval run 4 (after draft quality pass 3)
+
+Settings: `gemini-3.5-flash-lite`, free tier, 30 s timeout, 6 s pause between calls. This is **one run, not a scored
+eval**.
+
+**Totals:**
+- 24/24 calls succeeded
+- categories 12/12, priorities 12/12
+- average 3.4 s per classification and 3.2 s per draft
+- tokens 26,269 in, 1,971 out, 0 cached, so implicit caching again didn't show up
+
+**Cost (estimate):** about **$0.013 for the 24 calls** (12 tickets), roughly $0.001 per ticket. That's at the paid list
+price of $0.30 / $2.50 per million input / output tokens:
+- 26,269 × $0.30/M ≈ $0.0079
+- 1,971 × $2.50/M ≈ $0.0049
+
+It comes from the prices stated in these docs, not from a measured bill, and the run itself used the free tier.
+
+**Draft checks:**
+
+| Check | Result |
+|---|---|
+| required points | 11 pass, 1 fail |
+| bank once | 12 pass |
+| no roll-over date | pass on the roll-over ticket |
+| dates | 12 pass |
+| numbers grounded | 12 pass |
+
+The one required-points failure is the weak `channels` keyword test on the account-level bio ticket. The draft offers
+the dashboard and a reply route but never uses the word "email". So the check is right that the KB's wording ("email
+the team") is missing, and that ties in with weakness (a) below.
+
+**Improved since run 3 (from reading the drafts):**
+- The roll-over ticket no longer gives a payout date.
+- The "too low" ticket states our records, offers a breakdown, and no longer asks a paid author for bank details.
+- The repeated-contact tickets include an apology.
+- The co-author question says the team will confirm within 48 hours.
+- The account-level ticket names no book.
+
+That covers all five run-3 problems plus the account-level fix, as far as one run can show.
+
+**Remaining weaknesses (from reading the drafts; the automated checks miss them):**
+- **(a)** Two general drafts say the author can reply to the message and the team will submit the update. The KB
+  doesn't state that; it names the dashboard and emailing the team.
+- **(b)** The "too low" draft doesn't set the author's 200 copies against our record of 156. It also says a 14 Nov
+  payout will cover Jul–Sep 2026, although nothing is pending.
+- **(c)** A typesetting draft says it "has taken longer than usual", a claim the KB has no figure for.
+- **(d)** The co-author draft adds the publication date unprompted.
+- **(e)** Drafts promise internal actions ("escalated", "re-sync requested") that an admin must make true before
+  sending.
+- **(f)** Some drafts are under 80 words, which is information only, not a failure.
+
+**Reliability:** timeouts across the four Gemini runs were 1/24, 8/24, 0/24 and 0/24. Free-tier reliability varies,
+and four runs are not a scored eval. **Anthropic is still untested against the real API.**
+
+**Why this is acceptable for now:** the production design relies on an admin reading and editing every draft before
+it is sent. No draft reaches an author automatically. Weaknesses (a)–(e) are what that review exists to catch,
+especially (e), where the admin has to actually escalate or request the re-sync the draft describes. A scored eval
+with graded outputs over many runs is still the missing piece before trusting drafts with less review.
 
 ## Why Haiku
 
