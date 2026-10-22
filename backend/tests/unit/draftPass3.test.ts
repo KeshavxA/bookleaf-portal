@@ -105,6 +105,13 @@ describe("1. roll-over balances get no payout date", () => {
     expect(check(`Your last payout was on 1 Dec 2025.`, c, "no roll-over date").status).toBe("pass");
   });
 
+  it("the system prompt's roll-over rule matches FACTS and forbids a date", () => {
+    expect(DRAFTER_SYSTEM_PROMPT).toContain(
+      "explain that it carries forward and is paid in the first quarterly payout cycle after accumulated royalty reaches ₹1,000. Give no payout date for that balance.",
+    );
+    expect(DRAFTER_SYSTEM_PROMPT).not.toContain("rolls over to the next quarter");
+  });
+
   it("the check does not apply to tickets above the threshold", () => {
     const ganges = ctx("ROYALTY_PAYMENTS", "When will my pending royalty be paid?", GANGES);
     expect(check("The next payout is 14 Nov 2026.", ganges, "no roll-over date").status).toBe("n/a");
