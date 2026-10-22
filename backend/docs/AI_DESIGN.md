@@ -6,12 +6,16 @@ client (`src/ai/llm/client.ts`) over a provider chosen by `LLM_PROVIDER`: `claud
 default), or a Gemini model set in `LLM_MODEL`. Nothing the model produces reaches an author without an admin
 choosing to send it.
 
-> **Status (2026-10-21):** the **Anthropic path has not been run against the real API**; it has only been tested
-> with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had two manual
-> `npm run ai:eval` runs** on `gemini-3.5-flash-lite` (free tier). Run 1: category 12/12, priority 11/12, 1 of 24
-> calls timed out. Run 2, after the first draft quality pass: 8 of 24 calls timed out at 30 s, so only 9 drafts came
-> back. Each is a single unscored run, not an eval. **The second draft quality pass (required points, production
-> wording, fallback rules) has not been run against any model yet**; see "Draft quality pass 2" below.
+> **Status (2026-10-22):** the **Anthropic path has not been run against the real API**; it has only been tested
+> with a fake SDK. The Haiku token and cost numbers below are estimates. The **Gemini path has had three manual
+> `npm run ai:eval` runs** on `gemini-3.5-flash-lite` (free tier):
+> - Run 1: category 12/12, priority 11/12, and 1 of 24 calls timed out.
+> - Run 2: 8 of 24 calls timed out.
+> - Run 3, after the second draft quality pass: 24/24 calls succeeded, category 12/12, priority 12/12. Reading the
+>   drafts found five problems.
+>
+> Each is a single unscored run, not an eval. **The third draft quality pass has not been run against any model
+> yet**; see "Draft quality pass 3" below.
 
 ## Prompt strategy
 
@@ -38,9 +42,15 @@ then applies one hard rule: ISBN tickets are never below HIGH. Haiku 5.5 rejects
      the author asked about money.
 
    Royalty figures, the next payout date (quarter end + 45 days, on or after today), the ₹1,000 roll-over, the
-   payout-review flag and bank status go in only when the ticket is about payment. That means the
-   `ROYALTY_PAYMENTS` category, or the author's own text mentions royalties, payouts, payment or bank. An amount on its
-   own, like an injected "₹50,000 bonus", doesn't count.
+   payout-review flag and bank status go in only when the ticket is about payment:
+   - A balance under ₹1,000 gets **no payout date**. FACTS say it carries forward and is paid in the first quarterly
+     cycle after accumulated royalty reaches ₹1,000, and that no investigation is needed.
+   - Bank details are asked for only when no royalty has ever been paid for the book. Otherwise FACTS say "do not
+     ask".
+   - With no book selected, FACTS give a count of books on file, and name a book only if the author named it.
+
+   A ticket counts as about payment when it's in the `ROYALTY_PAYMENTS` category, or the author's own text mentions
+   royalties, payouts, payment or bank. An amount on its own, like an injected "₹50,000 bonus", doesn't count.
 4. `<focus>`, computed in code. It says whether this is a payment ticket and, under "Cover these points", lists the
    points the KB says this category's reply should make. Only the points that apply are listed (for example, the
    roll-over only when pending is under ₹1,000). The points are defined once in `src/ai/drafter/requiredPoints.ts`,
@@ -220,7 +230,7 @@ Untested in this run: #4 (printing), #6 (typesetting) and #8 (the legal threat) 
 those categories weren't exercised against the model. Two runs, one of them half-degraded, say very little about
 quality. A scored eval over many runs is still the missing piece.
 
-### Draft quality pass 2 (not yet evaluated)
+### Draft quality pass 2 (evaluated by run 3)
 
 Changes since run 2. These are code and prompt changes only; **no model has been run on them**:
 - **Required points per category in the focus note,** taken from each KB section's "How to answer" guidance:
@@ -246,6 +256,53 @@ is still printed, as information only. The keyword tests have limits:
 What to look for in the next run: required-point coverage per category, whether drafts get longer as a side effect
 (the old length problem), and whether production drafts stay off money. The fallback fixes only show up if
 classifications time out again.
+
+### Gemini eval run 3 (after draft quality pass 2)
+
+This is the first run with the required-points check, and **one run, not a scored eval**:
+- 24/24 calls succeeded
+- categories 12/12, priorities 12/12
+- about 5.6 s per classification and 5.0 s per draft
+- about 1,050 input tokens per call, 0 cached tokens
+
+Unlike run 2, no call timed out, so no ticket was misfiled by the keyword fallback. The per-ticket check table isn't
+recorded in the repo.
+
+Reading the drafts found **five problems the automated checks didn't catch**:
+1. **Roll-over payout date.** An ₹850 balance (under ₹1,000) was given a "14 Nov"-style payout date, and a team
+   investigation was promised. FACTS still printed the next payout date for every royalty ticket, and the KB's
+   royalty guidance says to give one.
+2. **Bank details asked of paid authors.** The request went out whenever bank status was unknown, which is every
+   seeded author, even when royalties had already been paid out.
+3. **Amount disputes.** "I sold 200 copies but only received ₹3,000" wasn't answered with what our records show, or
+   with the KB's offer of a line-by-line breakdown.
+4. **Not owning the wait.** Authors who said they had written before, or got no reply, got no apology for the wait.
+5. **Outside the KB.** A draft said "yes, you can" to adding a co-author, which the KB doesn't cover.
+
+### Draft quality pass 3 (not yet evaluated)
+
+Code and prompt changes only; **no model has been run on them**. Each change maps to a problem above:
+
+| Problem | Change | How the eval sees it |
+|---|---|---|
+| 1. Roll-over date | FACTS for a balance under ₹1,000 drop the payout date and state the carry-forward rule. The focus note forbids a date and a team investigation. The `date` point no longer applies | new **"no roll-over date"** check (any upcoming date, or a day and month with no year, fails); `rollover` point ("roll over" / "carries forward") |
+| 2. Bank details | Ask only when no royalty has ever been paid for the book (`shouldAskBankDetails`). Otherwise FACTS and the focus note say "do not ask" | `bank` point applies only then; "bank once" is unchanged |
+| 3. Amount disputes | A dispute (`isRoyaltyDispute`: "too low", "different from", or an amount or copy count tied to received/paid/sold) adds two points: state the records plainly, and offer a line-by-line breakdown | `records` (copies sold and total earned appear as numbers), `breakdown` |
+| 4. Own the wait | Cross-category `sorry-wait` point when the author says they wrote before or were ignored, or a payout review is flagged on a payment ticket. It must not call the payment late or admit a fault | `sorry-wait`: an apology near wait/delay/reply, and none of "payment is late/overdue", "our mistake/fault" |
+| 5. Outside the KB | A system-prompt rule: no "yes, you can", and no policy or process that isn't in POLICY or FACTS, with a 48-hour confirmation instead. General questions the KB doesn't cover (co-author) get `kb-only` instead of `direct` | `kb-only`: "48 hours", and no "yes ... you can" |
+
+Pass 3 also covers **account-level tickets**, a problem first seen in run 1 (#9 named "Turban Tales" on a bio question
+that never mentioned it). With no book selected, FACTS no longer list titles, only a count of books on file and any
+title the author named. The focus note says not to name a book.
+
+**Limits:**
+- The dispute and "wrote before" detection is regex on the author's text. It will miss paraphrases and can fire on
+  unusual wording.
+- `records` only checks that two numbers appear, not that the explanation is good or non-defensive.
+- `sorry-wait` can't tell a sincere sentence from a formulaic one.
+
+Every rule and keyword test is pinned by unit tests (`tests/unit/draftPass3.test.ts`) using the dataset rows the
+problems were seen on.
 
 ## Why Haiku
 

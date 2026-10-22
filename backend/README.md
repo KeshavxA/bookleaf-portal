@@ -414,31 +414,57 @@ classification and draft, then a pass/fail table of automatic draft checks (`src
   shows every point as covered (`+`) or missing (`-`), and the totals give coverage per category and point.
 - **bank once:** bank details requested at most once
 - **no off-topic money:** no royalty, payout or bank text on tickets that aren't about payment
+- **no roll-over date** (`r/o date` column): on a ticket whose pending balance is under ₹1,000, the draft gives no
+  upcoming date (or day and month without a year). A past date, such as a last payout, is fine
 - **dates:** dates in the house format, "14 Nov 2026"
 - **numbers grounded:** every number appears in the prompt sources
 
 | Category | Required points and their keyword tests |
 |---|---|
-| ROYALTY_PAYMENTS | `ack` (understand / sorry / concern...), `cycle` ("quarter" + "45 days"), `date` (the computed payout date), `rollover`* ("roll over"), `bank`* ("bank details/account"), `48h`* ("48 hours") |
+| ROYALTY_PAYMENTS | `ack` (understand / sorry / concern...), `cycle` ("quarter" + "45 days"), `date`* (the computed payout date), `rollover`* ("roll over" / "carries forward"), `bank`* ("bank details/account"), `48h`* ("48 hours"), `records`* (the book's copies sold and total earned, as numbers), `breakdown`* ("breakdown") |
 | ISBN_METADATA | `serious` (serious / priority / responsibility), `escalate` ("escalat*" + "production team"), `48h` |
 | PRINTING_QUALITY | `sorry`, `photos`, `reprint` ("reprint" + free / no cost), `5-7d` ("5-7" or "5 to 7" + "business days") |
 | DISTRIBUTION_AVAILABILITY | `sync` ("stock sync" / "sync issue"), `resync` ("re-sync" + "distribution team"), `24-48h` |
 | BOOK_STATUS_PRODUCTION | `status` (the stage from FACTS), `no-blame` (negative test: "because you", "you didn't"...; weak), `timeline` ("48 hours", "within N days", "by 14 Nov 2026") |
-| GENERAL_INQUIRY | `direct` ("yes", "no", "you can"... in the first two paragraphs; weak), `channels`* ("dashboard" + "email"), `3-5d`* |
+| GENERAL_INQUIRY | `direct`* ("yes", "no", "you can"... in the first two paragraphs; weak), `channels`* ("dashboard" + "email"), `3-5d`*, `kb-only`* ("48 hours" and no "yes ... you can") |
+| Any category | `sorry-wait`* (sorry/apologise near wait/delay/reply, and no "payment is late/overdue" or "our mistake/fault") |
 
 \* Only when it applies:
+- date: pending is ₹1,000 or more (a roll-over balance gets no date)
 - roll-over: pending is under ₹1,000
-- bank: bank status isn't known
+- bank: no royalty has ever been paid for the book (and bank status isn't known to be linked)
 - 48h: a payout review is flagged
-- channels and 3-5d: description, bio, photo or metadata questions
+- records and breakdown: the author disputes the amount ("too low", "different from", or an amount or copy count
+  tied to received/paid/sold)
+- sorry-wait: the author says they wrote before or were ignored, or a payout review is flagged on a payment ticket
+- direct, channels and 3-5d: description, bio, photo or metadata questions
+- kb-only: general questions the KB doesn't cover (e.g. adding a co-author)
 
 **Word count** is printed as information only and is never pass/fail. Each table comes from **one run, not a scored
 eval**. The keyword tests catch a missing point, not a badly made one, and they don't judge tone or correctness.
 
-> **No eval has been run since the second draft quality pass** (required points in the focus note, no money wording
-> on production tickets, the keyword-fallback fixes). There are no results with the required-points check yet. The
-> table below is from the run before those changes and uses the old checks, including a length pass/fail that no
-> longer exists.
+**Run 3** (Gemini, `gemini-3.5-flash-lite`, free tier), the first run after the second draft quality pass and the
+first with the required-points check. This is **one run, not a scored eval**:
+- 24/24 calls succeeded
+- categories 12/12, priorities 12/12
+- about 5.6 s per classification and 5.0 s per draft
+- about 1,050 input tokens per call, 0 cached tokens
+
+Reading the drafts found five problems the automated checks didn't catch:
+1. A roll-over ticket (₹850, under ₹1,000) was given a payout date, and a team investigation was promised.
+2. Bank details were requested from authors who had already been paid.
+3. A royalty-amount dispute was answered without stating our records or offering a line-by-line breakdown.
+4. Escalated or ignored authors got no apology for the wait.
+5. A draft said "yes, you can" about something the KB doesn't cover (adding a co-author).
+
+The third draft quality pass targets all five (items 1–5 in `docs/AI_DESIGN.md`). It also stops account-level replies
+naming a book the author didn't mention, a problem first seen in run 1 (#9). Three new checks back this up: the
+"no roll-over date" check, the `records`, `breakdown`, `sorry-wait` and `kb-only` points, and the narrower `bank` and
+`date` points.
+
+> **No eval has been run since the third draft quality pass.** Whether these fixes work on the model is unverified.
+> The per-ticket table from run 3 isn't recorded here. The table below is from run 2 and uses the old checks,
+> including a length pass/fail that no longer exists.
 
 Second Gemini run (2026-10-21, `gemini-3.5-flash-lite`, free tier, 30 s timeout), after the first draft quality
 pass, with the old check set:
@@ -535,7 +561,7 @@ disconnects. `trust proxy` is set so rate limiting sees real client IPs.
 | Unit + integration tests (144) | ✅ verified | `npm test` against local PostgreSQL 14, Node 22. Both providers are covered with fake SDK transports |
 | Production build and start sequence | ✅ verified locally | `npm run build`, then `npm run start:prod` with `NODE_ENV=production` on a fresh empty database: both migrations applied, seed and 8 demo tickets created, `/health` ok, admin login and queue in urgency order. A second start created 0 demo tickets. The placeholder `JWT_SECRET` was refused, and the generated secret did not appear in the logs |
 | **Anthropic API** (classification, drafts, prompt caching, token and cost figures) | ❌ **not run against the real API** | No Anthropic key was available. The Anthropic path has only run against a fake SDK transport. The Haiku cost figures in this README are estimates |
-| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval). **The second draft quality pass (required points, production wording, fallback rules) has not been run against the API** |
+| **Gemini API**, `gemini-3.5-flash-lite`, free tier | ⚠️ partly verified: one manual `ai:eval` run, 2026-10-21 | 12 tickets, 24 calls: **category 12/12, priority 11/12**. 23 calls succeeded and 1 hit the 15 s timeout (the first classify, so it fell back to keyword triage, which caused the one priority miss). No 429s. Average latency 3.1 s classify, 5.0 s draft. 23,321 input / 2,358 output tokens, 0 cache reads. The prompt-injection case classified LOW and its draft promised nothing. The grounding tripwire flagged no numbers. One run is not a graded eval; see the draft notes in `docs/AI_DESIGN.md`. **Second run** (after the draft quality pass): 8 of 24 calls timed out at 30 s, so only 9 drafts and 7 AI classifications came back. See [AI eval](#ai-eval-npm-run-aieval). **Run 3** (after the second draft quality pass): 24/24 calls succeeded, categories 12/12, priorities 12/12, ~5.6 s classify / ~5.0 s draft; reading the drafts found five problems. **The third draft quality pass has not been run against the API** |
 | Gemini rate-limit, quota-exhausted and invalid-key handling against the live API | ❌ not verified | Not triggered in the real run; covered only with a fake SDK |
 | Docker image build | ❌ not verified | Docker not installed; the `Dockerfile` has never been built |
 | Render deploy (`render.yaml`) | ❌ not verified | Blueprint not applied yet |
