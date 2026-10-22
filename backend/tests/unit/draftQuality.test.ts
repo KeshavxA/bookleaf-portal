@@ -216,6 +216,7 @@ describe("checkDraft", () => {
       "required points": "fail",
       "bank once": "pass",
       "no off-topic money": "fail",
+      "no roll-over date": "n/a",
       dates: "fail",
       "numbers grounded": "fail",
     });

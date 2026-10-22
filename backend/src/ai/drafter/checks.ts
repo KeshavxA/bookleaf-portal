@@ -2,6 +2,7 @@ import { SIGN_OFF } from "./systemPrompt";
 import { isPaymentRelated, OFF_TOPIC_MONEY_RE } from "./relevance";
 import type { DraftContext } from "./types";
 import { checkRequiredPoints, type PointResult } from "./requiredPoints";
+import { assessRoyalty } from "../../domain/payout";
 
 /**
  * Deterministic checks on a generated draft. The drafter uses some of them to fix
@@ -70,10 +71,37 @@ export function findBadDates(draft: string): string[] {
   return [...new Set(bad)];
 }
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const DAY_MONTH = /\b(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)[a-z]*\.?(?:,?\s+(\d{4}))?\b/gi;
+
+/**
+ * Dates on or after `today` (or with no year, e.g. "14 Nov"): on a roll-over ticket any of
+ * these reads as a promised payout date. Past dates (a last payout) are fine.
+ */
+export function findUpcomingDates(draft: string, today: Date): string[] {
+  const out: string[] = [];
+  for (const m of draft.matchAll(DAY_MONTH)) {
+    const month = MONTHS.indexOf(m[2]!.slice(0, 3).toLowerCase());
+    if (!m[3]) {
+      out.push(m[0]);
+      continue;
+    }
+    const date = Date.UTC(Number(m[3]), month, Number(m[1]));
+    const startOfToday = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    if (date >= startOfToday) out.push(m[0]);
+  }
+  return out;
+}
+
+/** A payment ticket whose book has a pending balance under the payout threshold. */
+export function isRollOverTicket(ctx: DraftContext): boolean {
+  return isPaymentRelated(ctx) && ctx.book !== null && assessRoyalty(ctx.book, ctx.today ?? new Date()).belowThreshold;
+}
+
 export type CheckStatus = "pass" | "fail" | "n/a";
 
 export interface DraftCheck {
-  name: "required points" | "bank once" | "no off-topic money" | "dates" | "numbers grounded";
+  name: "required points" | "bank once" | "no off-topic money" | "no roll-over date" | "dates" | "numbers grounded";
   status: CheckStatus;
   detail: string;
 }
@@ -93,6 +121,7 @@ export function checkDraft(draft: string, ctx: DraftContext, ungroundedNumbers: 
   const payment = isPaymentRelated(ctx);
   const offTopic = payment ? null : (OFF_TOPIC_MONEY_RE.exec(draft)?.[0] ?? "");
   const badDates = findBadDates(draft);
+  const rollOverDates = isRollOverTicket(ctx) ? findUpcomingDates(draft, ctx.today ?? new Date()) : null;
 
   return {
     words: bodyWordCount(draft),
@@ -108,6 +137,11 @@ export function checkDraft(draft: string, ctx: DraftContext, ungroundedNumbers: 
         name: "no off-topic money",
         status: offTopic === null ? "n/a" : offTopic ? "fail" : "pass",
         detail: offTopic === null ? "payment ticket" : offTopic ? `mentions "${offTopic}"` : "none",
+      },
+      {
+        name: "no roll-over date",
+        status: rollOverDates === null ? "n/a" : rollOverDates.length ? "fail" : "pass",
+        detail: rollOverDates === null ? "not a roll-over ticket" : rollOverDates.join(", ") || "no payout date given",
       },
       { name: "dates", status: badDates.length ? "fail" : "pass", detail: badDates.join(", ") || "ok" },
       {
