@@ -44,21 +44,21 @@ function ctx(
 const ids = (c: DraftContext) => applicablePoints(c).map((p) => p.id);
 
 describe("which points apply", () => {
-  it("royalty: overdue, bank unknown -> cycle, date, bank and the 48-hour review; no roll-over", () => {
-    expect(ids(ctx("ROYALTY_PAYMENTS", "No royalty yet"))).toEqual(["ack", "cycle", "date", "bank", "48h"]);
+  it("royalty: review flagged, never paid -> apology, cycle, date, bank and the 48-hour review; no roll-over", () => {
+    expect(ids(ctx("ROYALTY_PAYMENTS", "No royalty yet"))).toEqual(["ack", "sorry-wait", "cycle", "date", "bank", "48h"]);
   });
 
-  it("royalty: under ₹1,000 -> roll-over, no review; bank linked -> no bank point", () => {
-    expect(ids(ctx("ROYALTY_PAYMENTS", "Where is my royalty?", belowThreshold, true))).toEqual(["ack", "cycle", "date", "rollover"]);
+  it("royalty: under ₹1,000 -> roll-over and no payout date; bank linked -> no bank point", () => {
+    expect(ids(ctx("ROYALTY_PAYMENTS", "Where is my royalty?", belowThreshold, true))).toEqual(["ack", "cycle", "rollover"]);
   });
 
-  it("royalty without a book: no date or roll-over point", () => {
-    expect(ids(ctx("ROYALTY_PAYMENTS", "When are royalties paid?", null))).toEqual(["ack", "cycle", "bank"]);
+  it("royalty without a book: no date, roll-over or bank point", () => {
+    expect(ids(ctx("ROYALTY_PAYMENTS", "When are royalties paid?", null))).toEqual(["ack", "cycle"]);
   });
 
-  it("general: metadata points only for description/bio/photo questions", () => {
+  it("general: metadata questions get the KB answer; anything else gets 'confirm within 48 hours'", () => {
     expect(ids(ctx("GENERAL_INQUIRY", "Can I update my book description?"))).toEqual(["direct", "channels", "3-5d"]);
-    expect(ids(ctx("GENERAL_INQUIRY", "Which publishing packages do you offer?"))).toEqual(["direct"]);
+    expect(ids(ctx("GENERAL_INQUIRY", "Which publishing packages do you offer?"))).toEqual(["kb-only"]);
   });
 
   it("every category has at least one point", () => {
@@ -115,8 +115,8 @@ describe("keyword checks", () => {
 
   it("royalty: a complete draft covers every point; a missing date is caught", () => {
     const c = ctx("ROYALTY_PAYMENTS", "No royalty yet");
-    const good = `Hi Ananya,\n\nI understand how frustrating this wait is. Royalties are calculated each quarter and paid within 45 days of the quarter ending. Your next scheduled payout is 14 Nov 2026. Could you confirm your bank details in your dashboard? Our accounts team is checking this payment and will update you within 48 hours.\n\n${SIGN}`;
-    expect(covered(good, c)).toEqual({ ack: true, cycle: true, date: true, bank: true, "48h": true });
+    const good = `Hi Ananya,\n\nI understand how frustrating this is, and I'm sorry you have had to wait so long. Royalties are calculated each quarter and paid within 45 days of the quarter ending. Your next scheduled payout is 14 Nov 2026. Could you confirm your bank details in your dashboard? Our accounts team is checking this payment and will update you within 48 hours.\n\n${SIGN}`;
+    expect(covered(good, c)).toEqual({ ack: true, "sorry-wait": true, cycle: true, date: true, bank: true, "48h": true });
     expect(covered(good.replace("14 Nov 2026", "mid-November"), c).date).toBe(false);
   });
 

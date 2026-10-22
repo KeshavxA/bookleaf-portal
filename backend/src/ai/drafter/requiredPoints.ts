@@ -2,6 +2,7 @@ import { assessRoyalty, MIN_PAYOUT_THRESHOLD_INR } from "../../domain/payout";
 import { formatHumanDate } from "../../lib/dates";
 import type { Category } from "../../domain/enums";
 import { isInProduction, productionStage } from "./facts";
+import { isPaymentRelated, isRoyaltyDispute, saysIgnoredOrRepeated, shouldAskBankDetails } from "./relevance";
 import type { DraftContext } from "./types";
 
 /**
@@ -31,8 +32,21 @@ const royalty = (ctx: DraftContext) => (ctx.book && !isInProduction(ctx.book.sta
 /** "24-48", "24 to 48", "24–48" */
 const range = (a: number, b: number) => new RegExp(`\\b${a}\\s*(?:-|–|to)\\s*${b}\\b`, "i");
 
+/** Copies sold and total earned, as the draft would write them ("156", "₹3,120"). */
+const inrDigits = (n: number) => n.toLocaleString("en-IN");
+
+/** Claims the "own the wait" sentence must never make. */
+export const LATE_OR_FAULT =
+  /\b(payment|royalty|payout)s? (is|was|are|were|has been|have been) (late|overdue|delayed|missed)\b|\b(our|my) (mistake|fault|error)\b|\bwe (made a mistake|got it wrong|failed to pay)\b/i;
+
 const ACKNOWLEDGE = /\b(understand|sorry|apologi[sz]e|frustrat\w*|concern\w*|thank you for)\b/i;
-const METADATA_TOPIC = /\b(description|blurb|bio|biography|photo|metadata|author name|subtitle|keywords?)\b/i;
+/** Metadata the KB covers (description-style updates). Co-author changes are not covered by POLICY. */
+const METADATA_TOPIC = /\b(description|blurb|bio|biography|photo|metadata|subtitle|keywords?)\b/i;
+const NOT_COVERED = /\bco-?authors?\b/i;
+const isMetadataQuestion = (ctx: DraftContext) => {
+  const text = `${ctx.ticket.subject}\n${ctx.ticket.description}`;
+  return METADATA_TOPIC.test(text) && !NOT_COVERED.test(text);
+};
 
 /** Body paragraphs after the greeting line. */
 function firstBodyParagraphs(draft: string, n: number): string {
@@ -56,21 +70,26 @@ export const REQUIRED_POINTS: Record<Category, RequiredPoint[]> = {
     {
       id: "date",
       instruction: "Give the next scheduled payout date from FACTS.",
-      applies: (ctx) => royalty(ctx) !== null,
+      // Not for a balance under the threshold: it has no payout date (see "rollover").
+      applies: (ctx) => royalty(ctx) !== null && royalty(ctx)!.belowThreshold === false,
       check: (d, ctx) => d.includes(formatHumanDate(royalty(ctx)!.next.payoutDate)),
       checkDescription: "the computed next payout date, e.g. \"14 Nov 2026\"",
     },
     {
       id: "rollover",
-      instruction: `Explain that the pending amount is under ₹${MIN_PAYOUT_THRESHOLD_INR.toLocaleString("en-IN")} and rolls over to the next quarter.`,
-      applies: (ctx) => royalty(ctx)?.belowThreshold === true && (ctx.book?.royaltyPending ?? 0) > 0,
-      check: (d) => /\broll(s|ed|ing)?[ -]?over\b/i.test(d),
-      checkDescription: '"roll over" / "rolls over"',
+      instruction:
+        `Explain that the pending amount is under ₹${inrDigits(MIN_PAYOUT_THRESHOLD_INR)}, carries forward, and is paid in the first ` +
+        `quarterly payout cycle after accumulated royalty reaches ₹${inrDigits(MIN_PAYOUT_THRESHOLD_INR)}. ` +
+        "Do not give a payout date for it, and do not promise a team investigation: nothing is wrong.",
+      applies: (ctx) => royalty(ctx)?.belowThreshold === true,
+      check: (d) => /\broll(s|ed|ing)?[ -]?over\b|\bcarr(y|ies|ied) (it )?forward\b/i.test(d),
+      checkDescription: '"roll(s) over" or "carries forward" (the separate "no roll-over date" check catches a payout date)',
     },
     {
       id: "bank",
       instruction: "Ask the author once to confirm their bank details in the dashboard.",
-      applies: (ctx) => ctx.author.bankLinked !== true,
+      // Only when no royalty has ever been paid for the book (see shouldAskBankDetails).
+      applies: (ctx) => shouldAskBankDetails(ctx),
       check: (d) => /\bbank (details|account)\b/i.test(d),
       checkDescription: '"bank details" or "bank account" (the separate "bank once" check caps it at one)',
     },
@@ -80,6 +99,23 @@ export const REQUIRED_POINTS: Record<Category, RequiredPoint[]> = {
       applies: (ctx) => royalty(ctx)?.payoutReviewNeeded === true,
       check: (d) => /\b48 hours\b/i.test(d),
       checkDescription: '"48 hours"',
+    },
+    {
+      id: "records",
+      instruction:
+        "The author questions the amount: state plainly what our records show for this book (copies sold, royalty per copy, " +
+        "total earned, paid and pending), without being defensive.",
+      applies: (ctx) => isRoyaltyDispute(ctx) && royalty(ctx) !== null,
+      check: (d, ctx) =>
+        d.includes(inrDigits(ctx.book!.totalCopiesSold)) && d.includes(inrDigits(ctx.book!.totalRoyaltyEarned)),
+      checkDescription: "the book's copies sold and total royalty earned, as numbers (e.g. 156 and 3,120)",
+    },
+    {
+      id: "breakdown",
+      instruction: "Offer to share a detailed line-by-line royalty breakdown.",
+      applies: (ctx) => isRoyaltyDispute(ctx),
+      check: (d) => /\bbreak-?down\b/i.test(d),
+      checkDescription: '"breakdown" (e.g. "a detailed line-by-line breakdown")',
     },
   ],
   ISBN_METADATA: [
@@ -173,29 +209,62 @@ export const REQUIRED_POINTS: Record<Category, RequiredPoint[]> = {
     {
       id: "direct",
       instruction: "Answer the question directly from POLICY.",
+      // Only where POLICY covers the question; otherwise "kb-only" below applies.
+      applies: isMetadataQuestion,
       check: (d) => /\b(yes|no|you can|can be|is possible|is not possible)\b/i.test(firstBodyParagraphs(d, 2)),
       checkDescription: 'weak: "yes", "no", "you can", "can be", "is possible" in the first two body paragraphs',
     },
     {
       id: "channels",
       instruction: "Metadata updates (description, bio, photo) go through the dashboard or by emailing the BookLeaf team.",
-      applies: (ctx) => METADATA_TOPIC.test(`${ctx.ticket.subject}\n${ctx.ticket.description}`),
+      applies: isMetadataQuestion,
       check: (d) => /\bdashboard\b/i.test(d) && /\be-?mail/i.test(d),
       checkDescription: '"dashboard" and "email" (only for description/bio/photo/metadata questions)',
     },
     {
       id: "3-5d",
       instruction: "Changes reflect on the platforms within 3 to 5 business days.",
-      applies: (ctx) => METADATA_TOPIC.test(`${ctx.ticket.subject}\n${ctx.ticket.description}`),
+      applies: isMetadataQuestion,
       check: (d) => range(3, 5).test(d) && /business days/i.test(d),
       checkDescription: '"3-5" / "3 to 5" and "business days" (only for metadata questions)',
+    },
+    {
+      id: "kb-only",
+      instruction:
+        "POLICY does not cover this question: do not say yes or describe a process; say the team will confirm and reply within 48 hours.",
+      applies: (ctx) => !isMetadataQuestion(ctx),
+      check: (d) => /\b48 hours\b/i.test(d) && !/\byes\b[^.?!\n]{0,15}\byou can\b|^\s*yes\b/im.test(d.replace(/^Hi\b[^\n]*\n+/, "")),
+      checkDescription: '"48 hours" and no "yes ... you can" / opening "Yes"',
     },
   ],
 };
 
+/**
+ * Points that apply to any category. "Own the wait": when a payout review is flagged, or the
+ * author says they wrote before or were ignored, one sincere apology for the wait. It must not
+ * say the payment is late or admit a fault (the FACTS review flag is a check, not a finding).
+ */
+export const CROSS_CATEGORY_POINTS: RequiredPoint[] = [
+  {
+    id: "sorry-wait",
+    instruction:
+      "Include one sincere sentence apologising for the wait or for the lack of earlier replies. " +
+      "Do not say the payment is late, overdue or missed, and do not admit a fault.",
+    // The review flag only counts on payment tickets (an ISBN ticket on an unpaid book is not about the wait).
+    applies: (ctx) => saysIgnoredOrRepeated(ctx) || (isPaymentRelated(ctx) && royalty(ctx)?.payoutReviewNeeded === true),
+    check: (d) =>
+      /\b(sorry|apologi[sz]e)\b[^.?!]{0,80}\b(wait\w*|delay\w*|repl(y|ies|ied)|respon\w*|hear(ing)? back|follow\w*)\b/i.test(d) &&
+      !LATE_OR_FAULT.test(d),
+    checkDescription:
+      'sorry/apologise near wait/delay/reply/response, and none of "payment is late/overdue", "our mistake/fault"',
+  },
+];
+
 /** The points that apply to this ticket, in order. */
 export function applicablePoints(ctx: DraftContext): RequiredPoint[] {
-  return REQUIRED_POINTS[ctx.ticket.category].filter((p) => !p.applies || p.applies(ctx));
+  const [first, ...rest] = REQUIRED_POINTS[ctx.ticket.category];
+  // The apology belongs near the start: after the category's opening point.
+  return [first!, ...CROSS_CATEGORY_POINTS, ...rest].filter((p) => !p.applies || p.applies(ctx));
 }
 
 export interface PointResult {

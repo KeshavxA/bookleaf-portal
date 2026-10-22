@@ -4,7 +4,8 @@ import { formatHumanDate } from "../../lib/dates";
 import { escapeTags, userText } from "../promptText";
 import { DRAFTER_SYSTEM_PROMPT } from "./systemPrompt";
 import { buildFacts } from "./facts";
-import { isPaymentRelated } from "./relevance";
+import { isPaymentRelated, shouldAskBankDetails } from "./relevance";
+import { assessRoyalty } from "../../domain/payout";
 import { applicablePoints } from "./requiredPoints";
 import type { DraftContext } from "./types";
 
@@ -29,10 +30,20 @@ const MESSAGE_MAX_CHARS = 1500;
 export function focusNotes(ctx: DraftContext): string[] {
   const notes: string[] = [];
   if (isPaymentRelated(ctx)) {
-    notes.push("- This ticket is about payment. Use the royalty facts; ask about bank details at most once, and only if FACTS say they are unknown or not linked.");
+    notes.push(
+      shouldAskBankDetails(ctx)
+        ? "- This ticket is about payment. Use the royalty facts. Ask about bank details exactly once."
+        : "- This ticket is about payment. Use the royalty facts. Do not ask about bank details.",
+    );
+    if (ctx.book && assessRoyalty(ctx.book, ctx.today ?? new Date()).belowThreshold) {
+      notes.push(
+        "- The pending balance is under the payout threshold: give no payout date for it and do not promise a team investigation.",
+      );
+    }
   } else {
     notes.push("- This ticket is not about payment. Do not mention royalties, payouts, payment dates, the payout threshold or bank details.");
   }
+  if (!ctx.book) notes.push("- No book is selected: do not name a specific book unless the author named it.");
   const points = applicablePoints(ctx);
   if (points.length > 0) {
     notes.push("- Cover these points (skip one only if it clearly does not apply):");

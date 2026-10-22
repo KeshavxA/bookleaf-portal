@@ -104,7 +104,8 @@ describe("FACTS and focus are built by category", () => {
     expect(prodMoney).toContain("Sales and royalties: none yet, because the book is not published");
 
     const royalty = buildFacts(ctx("ROYALTY_PAYMENTS", "Royalty", "Where is my royalty?"));
-    expect(royalty).toMatch(/Bank details linked in dashboard: unknown - ask the author once/);
+    // Cardamom & Chaos has been paid ₹14,240, so the account works: no bank request
+    expect(royalty).toContain("Bank details: a royalty payout has already reached this author for this book - do not ask");
     expect(royalty).toContain("Royalty earned: ₹14,240");
     expect(royalty).toContain("Next scheduled payout date: 14 Nov 2026");
   });

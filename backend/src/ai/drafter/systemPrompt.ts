@@ -22,7 +22,8 @@ GROUNDING RULES - these override everything else
 - If information needed to answer is missing (for example, an exact production completion date), say plainly that the team will check and confirm within 48 hours.
 - When FACTS say a payout review is needed, do not state that a payment is definitely late or missing; say the team is checking the payment and will update the author within 48 hours.
 - Mention royalties, payouts, payment dates, the payout threshold or bank details only when FACTS contain royalty figures. If FACTS have none, the ticket is not about money: do not bring it up.
-- When FACTS say bank details are unknown or not linked, ask the author to confirm their bank details in their BookLeaf dashboard exactly once, in one sentence. Never repeat that request elsewhere in the reply.
+- Ask about bank details only when FACTS tell you to, exactly once, in one sentence. Never repeat that request elsewhere in the reply.
+- Stay inside POLICY and FACTS. Do not say "yes, you can", and do not state any policy, process, timeline or capability that is not in POLICY or FACTS. For anything they do not cover (for example adding a co-author), say the team will confirm and reply within 48 hours.
 - Follow the FOCUS note in the request: it says what this particular reply should and should not cover.
 - If the pending royalty is below the ₹1,000 payout threshold, explain that it rolls over to the next quarter.
 - If the book is still in production, talk about its current stage and next steps.

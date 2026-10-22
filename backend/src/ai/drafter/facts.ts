@@ -2,7 +2,7 @@ import { assessRoyalty, MIN_PAYOUT_THRESHOLD_INR } from "../../domain/payout";
 import { daysBetween, formatHumanDate } from "../../lib/dates";
 import type { Category } from "../../domain/enums";
 import type { DraftBookInput, DraftContext } from "./types";
-import { isPaymentRelated } from "./relevance";
+import { isPaymentRelated, shouldAskBankDetails, titlesNamedByAuthor } from "./relevance";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
@@ -40,7 +40,7 @@ export function buildFacts(ctx: DraftContext): string {
 
   lines.push(`Today: ${formatHumanDate(today)}`);
   lines.push(`Author: ${ctx.author.name} (address them as ${firstName})`);
-  if (payment) lines.push(`Bank details linked in dashboard: ${bankLine(ctx.author.bankLinked)}`);
+  if (payment) lines.push(`Bank details: ${bankLine(ctx)}`);
   const age = daysBetween(ctx.ticket.createdAt, today);
   lines.push(
     `Ticket: #${ctx.ticket.ticketNumber}, opened ${formatHumanDate(ctx.ticket.createdAt)} (${age} day${age === 1 ? "" : "s"} ago), status ${ctx.ticket.status}`,
@@ -49,19 +49,29 @@ export function buildFacts(ctx: DraftContext): string {
   if (ctx.book) {
     lines.push(...bookLines(ctx.book, ctx.ticket.category, payment, today));
   } else {
-    lines.push("Book: none selected (general / account-level query)");
+    // Account-level ticket: do not hand the model titles to name. A book appears only if the
+    // author's own text names it (run 1 named "Turban Tales" on a bio question that never mentioned it).
+    lines.push("Book: none selected (account-level query). Do not name a specific book unless the author named it.");
+    const named = new Set(titlesNamedByAuthor(ctx));
     if (ctx.author.books.length > 0) {
-      lines.push("Author's books on record:");
-      for (const b of ctx.author.books) lines.push(`  - "${b.title}" (${b.status})`);
+      lines.push(`Books on file: ${ctx.author.books.length}`);
+      for (const b of ctx.author.books.filter((x) => named.has(x.title))) {
+        lines.push(`  - named by the author: "${b.title}" (${b.status})`);
+      }
     }
   }
   return lines.join("\n");
 }
 
-function bankLine(bankLinked: boolean | null): string {
-  if (bankLinked === true) return "yes";
-  if (bankLinked === false) return "NO - ask the author once to link their bank account in the dashboard";
-  return "unknown - ask the author once to confirm their bank details in the dashboard";
+function bankLine(ctx: DraftContext): string {
+  if (ctx.author.bankLinked === true) return "linked - do not ask about them";
+  if (ctx.author.bankLinked === false) return "NOT linked - ask the author once to link their bank account in the dashboard";
+  if (shouldAskBankDetails(ctx)) {
+    return "unknown, and no royalty has ever been paid for this book - ask the author once to confirm their bank details in the dashboard";
+  }
+  return ctx.book
+    ? "a royalty payout has already reached this author for this book - do not ask about bank details"
+    : "not relevant without a selected book - do not ask about bank details";
 }
 
 function bookLines(book: DraftBookInput, category: Category, payment: boolean, today: Date): string[] {
@@ -106,12 +116,18 @@ function royaltyLines(book: DraftBookInput, today: Date): string[] {
   );
 
   const r = assessRoyalty(book, today);
+  if (r.belowThreshold) {
+    // No payout date for this balance: it is not paid on the next cycle unless it reaches the
+    // threshold by then, which we cannot know (run 3 promised "14 Nov 2026" for ₹850).
+    out.push(
+      `  Payout threshold: pending ${inr(book.royaltyPending)} is below the ${inr(MIN_PAYOUT_THRESHOLD_INR)} minimum. ` +
+        `It carries forward and is paid in the first quarterly payout cycle after accumulated royalty reaches ${inr(MIN_PAYOUT_THRESHOLD_INR)}.`,
+    );
+    out.push("  Payout date for this balance: none yet (do not give one); nothing is wrong, so no investigation is needed");
+    return out;
+  }
   if (book.royaltyPending === 0) {
     out.push("  Pending royalty: nothing pending - all earned royalty has been paid");
-  } else if (r.belowThreshold) {
-    out.push(
-      `  Payout threshold: pending ${inr(book.royaltyPending)} is below the ${inr(MIN_PAYOUT_THRESHOLD_INR)} minimum, so it rolls over to the next quarter`,
-    );
   } else {
     out.push(`  Payout threshold: pending amount is above the ${inr(MIN_PAYOUT_THRESHOLD_INR)} minimum`);
   }

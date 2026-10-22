@@ -51,13 +51,16 @@ describe("FACTS block", () => {
     expect(facts).toContain("Next scheduled payout date: 14 Nov 2026 (for Jul–Sep 2026 royalties)");
     expect(facts).toContain("pending: ₹2,546");
     expect(facts).toContain("Payout review: NEEDED");
-    expect(facts).toMatch(/Bank details linked in dashboard: unknown/);
+    expect(facts).toMatch(/Bank details: unknown, and no royalty has ever been paid for this book - ask the author once/);
     expect(facts).toContain("address them as Ananya");
   });
 
   it("explains threshold roll-over for small balances", () => {
     const facts = buildFacts(ctx({ book: { ...publishedBook, royaltyPending: 850, totalRoyaltyEarned: 850 } }));
-    expect(facts).toMatch(/below the ₹1,000 minimum, so it rolls over/);
+    expect(facts).toContain(
+      "below the ₹1,000 minimum. It carries forward and is paid in the first quarterly payout cycle after accumulated royalty reaches ₹1,000.",
+    );
+    expect(facts).not.toContain("Next scheduled payout date");
     expect(facts).not.toContain("Payout review");
   });
 
@@ -96,7 +99,8 @@ describe("FACTS block", () => {
   it("lists the author's books for account-level tickets", () => {
     const facts = buildFacts(ctx({ book: null, ticket: { ...ctx().ticket, category: "GENERAL_INQUIRY" } }));
     expect(facts).toContain("Book: none selected");
-    expect(facts).toContain('"Between Two Temples" (Published & Live)');
+    expect(facts).toContain("Books on file: 1");
+    expect(facts).not.toContain("Between Two Temples"); // not named by the author
   });
 });
 
