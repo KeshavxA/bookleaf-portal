@@ -6,7 +6,7 @@ import { DRAFTER_SYSTEM_PROMPT } from "./systemPrompt";
 import { buildFacts } from "./facts";
 import { isPaymentRelated, shouldAskBankDetails } from "./relevance";
 import { assessRoyalty } from "../../domain/payout";
-import { applicablePoints } from "./requiredPoints";
+import { applicablePoints, instructionFor } from "./requiredPoints";
 import type { DraftContext } from "./types";
 
 export const THREAD_WINDOW = 6;
@@ -47,7 +47,7 @@ export function focusNotes(ctx: DraftContext): string[] {
   const points = applicablePoints(ctx);
   if (points.length > 0) {
     notes.push("- Cover these points (skip one only if it clearly does not apply):");
-    points.forEach((p, i) => notes.push(`  ${i + 1}. ${p.instruction}`));
+    points.forEach((p, i) => notes.push(`  ${i + 1}. ${instructionFor(p, ctx)}`));
   }
   return notes;
 }

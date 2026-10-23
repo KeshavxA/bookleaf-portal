@@ -1,4 +1,5 @@
 import type { DraftContext } from "./types";
+import { daysBetween } from "../../lib/dates";
 
 /**
  * Words that make a ticket "about money" even outside the ROYALTY_PAYMENTS category.
@@ -74,3 +75,31 @@ export function titlesNamedByAuthor(ctx: Pick<DraftContext, "ticket" | "thread" 
   const text = authorText(ctx).toLowerCase();
   return ctx.author.books.map((b) => b.title).filter((t) => text.includes(t.toLowerCase()));
 }
+
+/** Days with no BookLeaf reply after which "not getting back to you sooner" is a fair thing to say. */
+export const NO_REPLY_DAYS_FOR_APOLOGY = 2;
+
+export type EarlierContact =
+  | { allowed: true; reason: "author-says" | "unanswered-follow-up" | "no-reply-for-days"; days: number }
+  | { allowed: false; reason: "fresh" | "already-replied"; days: number };
+
+/**
+ * May the draft mention earlier contact ("the lack of earlier replies", "not getting back to you
+ * sooner")? Only when it is true: the author says they wrote before or were ignored, the author
+ * has already followed up on this ticket without a BookLeaf reply, or the ticket is at least
+ * NO_REPLY_DAYS_FOR_APOLOGY days old with no BookLeaf reply. A 7-minute-old first message is none
+ * of these (live test, ticket #24).
+ */
+export function earlierContact(ctx: Pick<DraftContext, "ticket" | "thread" | "today">): EarlierContact {
+  const days = daysBetween(ctx.ticket.createdAt, ctx.today ?? new Date());
+  const adminReplied = ctx.thread.some((m) => m.senderType === "ADMIN");
+  const authorFollowUps = ctx.thread.filter((m) => m.senderType === "AUTHOR").length;
+  if (REPEATED_CONTACT.test(authorText(ctx))) return { allowed: true, reason: "author-says", days };
+  if (!adminReplied && authorFollowUps > 0) return { allowed: true, reason: "unanswered-follow-up", days };
+  if (!adminReplied && days >= NO_REPLY_DAYS_FOR_APOLOGY) return { allowed: true, reason: "no-reply-for-days", days };
+  return { allowed: false, reason: adminReplied ? "already-replied" : "fresh", days };
+}
+
+/** Phrases that claim earlier contact or a slow reply. Only allowed when earlierContact() says so. */
+export const EARLIER_CONTACT_CLAIM =
+  /\b(earlier|previous|prior) (repl(y|ies)|responses?|messages?|emails?|contact)\b|\b(lack|absence) of (a |any )?(earlier )?(repl(y|ies)|responses?)\b|\b(getting|get|got|gotten) back to you (sooner|earlier)\b|\bnot (getting|got|gotten) back to you\b|\bnot (replying|responding|answering) (sooner|earlier)\b|\b(repl(y|ied)|respond(ed)?|answer(ed)?) (sooner|earlier)\b|\bdelay in (replying|responding|getting back)\b|\bhear(ing)? back (from us )?(sooner|earlier)\b|\bkept you waiting for a (reply|response)\b/i;

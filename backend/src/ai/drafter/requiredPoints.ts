@@ -2,7 +2,13 @@ import { assessRoyalty, MIN_PAYOUT_THRESHOLD_INR } from "../../domain/payout";
 import { formatHumanDate } from "../../lib/dates";
 import type { Category } from "../../domain/enums";
 import { isInProduction, productionStage } from "./facts";
-import { isPaymentRelated, isRoyaltyDispute, saysIgnoredOrRepeated, shouldAskBankDetails } from "./relevance";
+import {
+  earlierContact,
+  isPaymentRelated,
+  isRoyaltyDispute,
+  saysIgnoredOrRepeated,
+  shouldAskBankDetails,
+} from "./relevance";
 import type { DraftContext } from "./types";
 
 /**
@@ -18,8 +24,8 @@ import type { DraftContext } from "./types";
 export interface RequiredPoint {
   /** Short id shown in the eval table. */
   id: string;
-  /** What the prompt asks for. */
-  instruction: string;
+  /** What the prompt asks for (may depend on the ticket). */
+  instruction: string | ((ctx: DraftContext) => string);
   /** False when the point does not apply to this ticket (it is then neither asked for nor checked). */
   applies?: (ctx: DraftContext) => boolean;
   /** Keyword test on the draft text; documented in `checkDescription`. */
@@ -243,12 +249,17 @@ export const REQUIRED_POINTS: Record<Category, RequiredPoint[]> = {
  * Points that apply to any category. "Own the wait": when a payout review is flagged, or the
  * author says they wrote before or were ignored, one sincere apology for the wait. It must not
  * say the payment is late or admit a fault (the FACTS review flag is a check, not a finding).
+ * It may mention earlier replies only when earlierContact() allows it; on a fresh ticket the
+ * apology is for the wait for the payment or book itself (live test, ticket #24).
  */
 export const CROSS_CATEGORY_POINTS: RequiredPoint[] = [
   {
     id: "sorry-wait",
-    instruction:
-      "Include one sincere sentence apologising for the wait or for the lack of earlier replies. " +
+    instruction: (ctx) =>
+      (earlierContact(ctx).allowed
+        ? "Include one sincere sentence apologising for the wait or for the lack of earlier replies. "
+        : "Include one sincere sentence apologising for the wait for the payment or the book itself. " +
+          "This is the author's first contact: do not mention earlier replies or not getting back sooner. ") +
       "Do not say the payment is late, overdue or missed, and do not admit a fault.",
     // The review flag only counts on payment tickets (an ISBN ticket on an unpaid book is not about the wait).
     applies: (ctx) => saysIgnoredOrRepeated(ctx) || (isPaymentRelated(ctx) && royalty(ctx)?.payoutReviewNeeded === true),
@@ -261,6 +272,10 @@ export const CROSS_CATEGORY_POINTS: RequiredPoint[] = [
 ];
 
 /** The points that apply to this ticket, in order. */
+export function instructionFor(point: RequiredPoint, ctx: DraftContext): string {
+  return typeof point.instruction === "function" ? point.instruction(ctx) : point.instruction;
+}
+
 export function applicablePoints(ctx: DraftContext): RequiredPoint[] {
   const [first, ...rest] = REQUIRED_POINTS[ctx.ticket.category];
   // The apology belongs near the start: after the category's opening point.

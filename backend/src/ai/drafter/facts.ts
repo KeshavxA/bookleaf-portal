@@ -2,7 +2,7 @@ import { assessRoyalty, MIN_PAYOUT_THRESHOLD_INR } from "../../domain/payout";
 import { daysBetween, formatHumanDate } from "../../lib/dates";
 import type { Category } from "../../domain/enums";
 import type { DraftBookInput, DraftContext } from "./types";
-import { isPaymentRelated, shouldAskBankDetails, titlesNamedByAuthor } from "./relevance";
+import { earlierContact, isPaymentRelated, shouldAskBankDetails, titlesNamedByAuthor } from "./relevance";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
@@ -45,6 +45,7 @@ export function buildFacts(ctx: DraftContext): string {
   lines.push(
     `Ticket: #${ctx.ticket.ticketNumber}, opened ${formatHumanDate(ctx.ticket.createdAt)} (${age} day${age === 1 ? "" : "s"} ago), status ${ctx.ticket.status}`,
   );
+  lines.push(`Earlier contact: ${earlierContactLine(ctx)}`);
 
   if (ctx.book) {
     lines.push(...bookLines(ctx.book, ctx.ticket.category, payment, today));
@@ -61,6 +62,22 @@ export function buildFacts(ctx: DraftContext): string {
     }
   }
   return lines.join("\n");
+}
+
+function earlierContactLine(ctx: DraftContext): string {
+  const c = earlierContact(ctx);
+  switch (c.reason) {
+    case "author-says":
+      return "the author says they have written before or not had a reply - acknowledging that is fine";
+    case "unanswered-follow-up":
+      return "the author has already followed up on this ticket without a reply from BookLeaf - acknowledging that is fine";
+    case "no-reply-for-days":
+      return `no reply from BookLeaf in ${c.days} days - acknowledging the slow reply is fine`;
+    case "already-replied":
+      return "BookLeaf has already replied on this ticket - do not apologise for a lack of replies";
+    case "fresh":
+      return "none - this is the author's first message on a new ticket; do not mention earlier replies or not getting back sooner";
+  }
 }
 
 function bankLine(ctx: DraftContext): string {
