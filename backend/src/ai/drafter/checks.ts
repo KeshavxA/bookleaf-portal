@@ -1,5 +1,5 @@
 import { SIGN_OFF } from "./systemPrompt";
-import { isPaymentRelated, OFF_TOPIC_MONEY_RE } from "./relevance";
+import { EARLIER_CONTACT_CLAIM, earlierContact, isPaymentRelated, OFF_TOPIC_MONEY_RE } from "./relevance";
 import type { DraftContext } from "./types";
 import { checkRequiredPoints, type PointResult } from "./requiredPoints";
 import { assessRoyalty } from "../../domain/payout";
@@ -101,7 +101,14 @@ export function isRollOverTicket(ctx: DraftContext): boolean {
 export type CheckStatus = "pass" | "fail" | "n/a";
 
 export interface DraftCheck {
-  name: "required points" | "bank once" | "no off-topic money" | "no roll-over date" | "dates" | "numbers grounded";
+  name:
+    | "required points"
+    | "bank once"
+    | "no off-topic money"
+    | "no roll-over date"
+    | "no false earlier-contact claim"
+    | "dates"
+    | "numbers grounded";
   status: CheckStatus;
   detail: string;
 }
@@ -122,6 +129,8 @@ export function checkDraft(draft: string, ctx: DraftContext, ungroundedNumbers: 
   const offTopic = payment ? null : (OFF_TOPIC_MONEY_RE.exec(draft)?.[0] ?? "");
   const badDates = findBadDates(draft);
   const rollOverDates = isRollOverTicket(ctx) ? findUpcomingDates(draft, ctx.today ?? new Date()) : null;
+  // On a ticket with no earlier contact, "the lack of earlier replies" is a false claim (ticket #24).
+  const falseContact = earlierContact(ctx).allowed ? null : (EARLIER_CONTACT_CLAIM.exec(draft)?.[0] ?? "");
 
   return {
     words: bodyWordCount(draft),
@@ -142,6 +151,11 @@ export function checkDraft(draft: string, ctx: DraftContext, ungroundedNumbers: 
         name: "no roll-over date",
         status: rollOverDates === null ? "n/a" : rollOverDates.length ? "fail" : "pass",
         detail: rollOverDates === null ? "not a roll-over ticket" : rollOverDates.join(", ") || "no payout date given",
+      },
+      {
+        name: "no false earlier-contact claim",
+        status: falseContact === null ? "n/a" : falseContact ? "fail" : "pass",
+        detail: falseContact === null ? "earlier contact is real" : falseContact ? `claims "${falseContact}"` : "none",
       },
       { name: "dates", status: badDates.length ? "fail" : "pass", detail: badDates.join(", ") || "ok" },
       {

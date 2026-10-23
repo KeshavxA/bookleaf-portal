@@ -12,6 +12,7 @@
  *   - bank details asked at most once
  *   - no royalty/payout/bank text on non-payment tickets
  *   - no payout date on roll-over tickets (pending under ₹1,000)
+ *   - no false earlier-contact claim ("earlier replies", "getting back to you sooner") on a first-contact ticket
  *   - house date format ("14 Nov 2026")
  *   - no ungrounded numbers
  * Word count is printed as information only, never pass/fail. No database needed.
@@ -332,15 +333,16 @@ const CHECK_NAMES: DraftCheck["name"][] = [
   "bank once",
   "no off-topic money",
   "no roll-over date",
+  "no false earlier-contact claim",
   "dates",
   "numbers grounded",
 ];
 
 export function printCheckTable(rows: CheckRow[], log: (line: string) => void = console.log) {
-  const cols = ["#", "category", "words", "points", "bank once", "money", "r/o date", "dates", "numbers", "required points (+ covered, - missing)"];
-  const widths = [2, 25, 5, 6, 9, 5, 8, 5, 7, 0];
+  const cols = ["#", "category", "words", "points", "bank once", "money", "r/o date", "contact", "dates", "numbers", "required points (+ covered, - missing)"];
+  const widths = [2, 25, 5, 6, 9, 5, 8, 7, 5, 7, 0];
   const fmt = (cells: string[]) => cells.map((c, i) => c.padEnd(widths[i]!)).join(" | ");
-  log(`\n${"─".repeat(78)}\nDRAFT CHECKS  (words = information only; money = no off-topic money; r/o date = no payout date on roll-over tickets)\n${"─".repeat(78)}`);
+  log(`\n${"─".repeat(78)}\nDRAFT CHECKS  (words = information only; money = no off-topic money; r/o date = no payout date on roll-over tickets;\ncontact = no false earlier-contact claim)\n${"─".repeat(78)}`);
   log(fmt(cols));
   for (const r of rows) {
     if (!r.report) {
@@ -357,6 +359,7 @@ export function printCheckTable(rows: CheckRow[], log: (line: string) => void = 
         MARK[by["bank once"].status],
         MARK[by["no off-topic money"].status],
         MARK[by["no roll-over date"].status],
+        MARK[by["no false earlier-contact claim"].status],
         MARK[by.dates.status],
         MARK[by["numbers grounded"].status],
         r.report.points.map((p) => `${p.id}${p.covered ? "+" : "-"}`).join(" ") || "(none apply)",
