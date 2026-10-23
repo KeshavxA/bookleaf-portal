@@ -21,7 +21,8 @@ import type {
 export const authApi = {
   login: (email: string, password: string) =>
     api<LoginResponse>('/auth/login', { method: 'POST', body: { email, password } }),
-  me: () => api<User>('/auth/me'),
+  /** Pass a token to check who it belongs to without making it the tab's token. */
+  me: (token?: string) => api<User>('/auth/me', { token }),
 };
 
 export const authorApi = {

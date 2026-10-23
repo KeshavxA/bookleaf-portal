@@ -39,6 +39,19 @@ function parseDetails(raw: unknown): ErrorDetail[] {
   );
 }
 
+/**
+ * The token this tab is using. AuthProvider sets it; until then the stored token is used. Reading it
+ * from memory rather than from localStorage on every call matters: localStorage is shared, so another
+ * tab signing in would otherwise make this tab send that user's token before it has noticed.
+ */
+let authToken: string | null | undefined;
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+}
+
+const currentToken = () => (authToken !== undefined ? authToken : tokenStorage.get());
+
 let onUnauthorized: (() => void) | null = null;
 let onForbidden: (() => Promise<void>) | null = null;
 
@@ -76,6 +89,8 @@ interface RequestOptions {
   body?: unknown;
   query?: Record<string, unknown>;
   signal?: AbortSignal;
+  /** Use this token instead of the tab's current one (to check a token before adopting it). */
+  token?: string;
 }
 
 function isErrorBody(v: unknown): v is ApiErrorBody {
@@ -90,7 +105,7 @@ function isErrorBody(v: unknown): v is ApiErrorBody {
 
 /** The single fetch wrapper: attaches the token, parses the contract error shape, logs out on 401. */
 export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const token = tokenStorage.get();
+  const token = opts.token ?? currentToken();
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;

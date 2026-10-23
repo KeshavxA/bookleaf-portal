@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ApiError, setForbiddenHandler, setUnauthorizedHandler } from '@/api/client';
+import { ApiError, setAuthToken, setForbiddenHandler, setUnauthorizedHandler } from '@/api/client';
 import { authApi } from '@/api/endpoints';
 import type { Role, User } from '@/api/types';
 import { TOKEN_KEY, tokenStorage } from '@/lib/tokenStorage';
@@ -25,7 +25,11 @@ const sameIdentity = (a: User | null, b: User | null) => !!a && !!b && a.id === 
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
-  const [token, setToken] = useState<string | null>(() => tokenStorage.get());
+  const [token, setToken] = useState<string | null>(() => {
+    const stored = tokenStorage.get();
+    setAuthToken(stored); // the API client sends this tab's token, not whatever another tab stored later
+    return stored;
+  });
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(() => !!tokenStorage.get());
   const [logoutReason, setLogoutReason] = useState<LogoutReason | null>(null);
@@ -45,18 +49,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [qc],
   );
 
+  const adoptToken = useCallback((next: string | null) => {
+    tokenRef.current = next;
+    setAuthToken(next);
+    setToken(next);
+  }, []);
+
   /** Ends the session in this tab. `clearStorage` is false when another tab already removed the token. */
   const endSession = useCallback(
     (reason: LogoutReason, clearStorage = true) => {
       if (clearStorage) tokenStorage.clear();
-      tokenRef.current = null;
-      setToken(null);
+      adoptToken(null);
       userRef.current = null;
       setUser(null);
       setLogoutReason(reason);
       qc.clear();
     },
-    [qc],
+    [qc, adoptToken],
   );
 
   const logout = useCallback((reason: LogoutReason = 'manual') => endSession(reason), [endSession]);
@@ -73,10 +82,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (tokenRef.current) endSession('elsewhere', false);
         return;
       }
-      tokenRef.current = stored;
-      setToken(stored);
       try {
-        applyUser(await authApi.me());
+        // Check the stored token before adopting it, so this tab keeps sending its own token (and showing
+        // its own user) until it knows who the new token belongs to. Then switch both at once.
+        const me = await authApi.me(stored);
+        adoptToken(stored);
+        applyUser(me);
         setLogoutReason(null);
       } catch (e) {
         // A 401 has already ended the session via the unauthorized handler. Without a user we can't
@@ -88,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       inflight.current = null;
     });
     return inflight.current;
-  }, [applyUser, endSession]);
+  }, [adoptToken, applyUser, endSession]);
 
   useEffect(() => {
     setUnauthorizedHandler(() => logout('expired'));
@@ -125,14 +136,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await authApi.login(email, password);
       qc.clear();
       tokenStorage.set(res.token);
-      tokenRef.current = res.token;
-      setToken(res.token);
+      adoptToken(res.token);
       userRef.current = res.user;
       setUser(res.user);
       setLogoutReason(null);
       return res.user;
     },
-    [qc],
+    [qc, adoptToken],
   );
 
   const value = useMemo<AuthValue>(

@@ -11,7 +11,9 @@ import { AuthProvider } from './AuthContext';
 
 const ADMIN: User = { id: 'ADM001', name: 'Neha Gupta', email: 'admin1@bookleaf.com', role: 'ADMIN' };
 const AUTHOR: User = { id: 'AUTH001', name: 'Priya Sharma', email: 'priya.sharma@email.com', role: 'AUTHOR' };
-const TOKENS: Record<string, User> = { 'tok-admin': ADMIN, 'tok-admin-2': ADMIN, 'tok-author': AUTHOR };
+const BASE_TOKENS: Record<string, User> = { 'tok-admin': ADMIN, 'tok-admin-2': ADMIN, 'tok-author': AUTHOR };
+/** Who each token belongs to on the fake server. Tests can change it, e.g. to model a role change. */
+let TOKENS: Record<string, User> = { ...BASE_TOKENS };
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -62,7 +64,10 @@ function otherTabSets(token: string | null) {
 }
 
 describe('multi-tab auth: storage events', () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    TOKENS = { ...BASE_TOKENS };
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it('an admin tab follows a sign-in as an author in another tab to /books', async () => {
@@ -126,15 +131,32 @@ describe('multi-tab auth: storage events', () => {
   });
 });
 
-describe('multi-tab auth: 403 re-check', () => {
+describe('multi-tab auth: own token and 403 re-check', () => {
+  beforeEach(() => {
+    TOKENS = { ...BASE_TOKENS };
+  });
   afterEach(() => vi.restoreAllMocks());
 
-  it('on a 403 caused by a swapped token (event missed), re-fetches /auth/me and redirects instead of erroring', async () => {
+  it("keeps sending this tab's own token when another tab overwrites storage (event not yet handled)", async () => {
     const spy = fakeBackend();
     const { router, queryClient } = renderApp('/admin', 'tok-admin');
     await screen.findByRole('heading', { name: 'Ticket queue' });
 
-    localStorage.setItem(TOKEN_KEY, 'tok-author'); // no storage event, e.g. it was missed
+    localStorage.setItem(TOKEN_KEY, 'tok-author'); // written by another tab; no storage event yet
+    await act(() => queryClient.invalidateQueries());
+
+    const last = calls(spy, '/admin/tickets').at(-1)!;
+    expect(new Headers(last[1]?.headers).get('Authorization')).toBe('Bearer tok-admin');
+    expect(router.state.location.pathname).toBe('/admin');
+    expect(screen.queryByText(/couldn't load|don't have access/i)).not.toBeInTheDocument();
+  });
+
+  it('on a 403 from a server-side role change, re-fetches /auth/me and redirects instead of erroring', async () => {
+    const spy = fakeBackend();
+    const { router, queryClient } = renderApp('/admin', 'tok-admin');
+    await screen.findByRole('heading', { name: 'Ticket queue' });
+
+    TOKENS['tok-admin'] = { ...ADMIN, role: 'AUTHOR' }; // the account lost admin rights
     await act(() => queryClient.invalidateQueries());
 
     expect(await screen.findByRole('heading', { name: 'My Books' })).toBeInTheDocument();
