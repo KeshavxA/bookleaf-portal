@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router';
 import { useAuth } from '@/features/auth/AuthContext';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { USE_MOCKS } from '@/lib/config';
 import { cn } from '@/lib/cn';
 import { Button } from './Button';
@@ -13,6 +14,8 @@ export interface NavItem {
 
 export function AppShell({ nav, area }: { nav: NavItem[]; area: string }) {
   const { user, logout } = useAuth();
+  // One title per area: "BookLeaf Author Portal" / "BookLeaf Support Admin".
+  useDocumentTitle(`BookLeaf ${area}`);
   return (
     <div className="min-h-screen">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:rounded focus:bg-white focus:px-3 focus:py-2">

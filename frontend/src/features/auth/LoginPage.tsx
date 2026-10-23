@@ -7,6 +7,7 @@ import { Button } from '@/components/Button';
 import { Field, Input } from '@/components/Field';
 import { Banner } from '@/components/States';
 import { FullPageSpinner } from '@/components/Spinner';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { USE_MOCKS } from '@/lib/config';
 import { applyServerErrors } from '@/lib/serverErrors';
 import { homeFor, useAuth } from './AuthContext';
@@ -27,6 +28,7 @@ const showDemoAccounts = USE_MOCKS || import.meta.env.DEV;
 
 export function LoginPage() {
   const { user, initializing, login, logoutReason } = useAuth();
+  useDocumentTitle('Sign in | BookLeaf');
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from;
