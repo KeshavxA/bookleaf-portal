@@ -416,6 +416,8 @@ classification and draft, then a pass/fail table of automatic draft checks (`src
 - **no off-topic money:** no royalty, payout or bank text on tickets that aren't about payment
 - **no roll-over date** (`r/o date` column): on a ticket whose pending balance is under ₹1,000, the draft gives no
   upcoming date (or day and month without a year). A past date, such as a last payout, is fine
+- **no false earlier-contact claim** (`contact` column): on a first-contact ticket the draft doesn't claim earlier
+  contact ("earlier replies", "getting back to you sooner")
 - **dates:** dates in the house format, "14 Nov 2026"
 - **numbers grounded:** every number appears in the prompt sources
 
@@ -505,6 +507,10 @@ not a scored eval. **Anthropic is still untested against the real API.**
 
 **The production design relies on an admin reading and editing every draft before it is sent.** Weaknesses (a)–(e)
 are the kind of thing that review exists to catch. Nothing the model writes reaches an author without that step.
+
+**Found in the first live app test (ticket #24), fixed in unit tests, not yet re-evaluated:** a 7-minute-old first
+message got "sorry for the wait and the lack of earlier replies". Drafts may now mention earlier contact only when the
+author says they wrote before, or the ticket is 2+ days old with no reply. The "contact" check above catches it.
 
 > **No eval has been run since run 4.** The per-ticket tables from runs 3 and 4 aren't recorded here. The table below
 > is from run 2 and uses the old checks, including a length pass/fail that no longer exists.

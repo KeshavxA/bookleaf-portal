@@ -366,6 +366,13 @@ it is sent. No draft reaches an author automatically. Weaknesses (a)–(e) are w
 especially (e), where the admin has to actually escalate or request the re-sync the draft describes. A scored eval
 with graded outputs over many runs is still the missing piece before trusting drafts with less review.
 
+**Found in the first live app test (ticket #24), fixed in unit tests, not yet re-evaluated:** a 7-minute-old first
+message got "I am sorry for the wait and the lack of earlier replies", claiming contact that never happened. Earlier
+replies may now be mentioned only when FACTS' new "Earlier contact" line allows it: the author says they wrote before
+or were ignored, they already followed up without a reply, or the ticket is at least 2 days old with no BookLeaf
+reply. Otherwise any apology is for the wait for the payment or book. The eval adds a "no false earlier-contact claim"
+check.
+
 ## Why Haiku
 
 Both jobs are short and tightly bounded: a six-way label, and a templated reply of about 150 words built from facts
