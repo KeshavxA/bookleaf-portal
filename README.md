@@ -296,12 +296,17 @@ providers are replaced with fake SDK transports. They cover:
 | **No prompt versioning:** prompts change in code with no version stored on each `AiCall` or draft | Store a prompt version per call, and gate prompt changes on a scored eval |
 | **Drafts promise internal actions** ("escalated", "re-sync requested") that an admin must make true | Add actions the admin can tick off when sending, or stop drafts from promising them |
 
-**`npm audit --omit=dev`** (run 24 Oct 2026; no dependencies were changed and `audit fix` was not run):
+**`npm audit --omit=dev`** (run 24 Oct 2026). In `backend/`, `npm audit fix` (without `--force`) updated `body-parser`
+from 2.3.0 to 2.4.0, fixing GHSA-27r3-jxmh-p828. No other package changed, and no major version moved. The frontend's
+dependencies are unchanged.
 
 | Package | Result |
 |---|---|
-| `backend/` | **4 high.** `body-parser` 2.0.0–2.3.0, used by Express 5 to parse request bodies: a denial of service through trailing bytes after a compressed body (GHSA-27r3-jxmh-p828). A non-breaking fix is available with `npm audit fix`. `deepmerge-ts` < 8, through `@prisma/config` and the `prisma` CLI (3 entries): stack exhaustion when merging recursive objects (GHSA-ggr8-5vv4-36mx). The only fix is Prisma 7, a major upgrade |
-| `frontend/` | **1 high.** `zod` < 4.6.6 (3.25.76 installed): memory exhaustion validating oversized constrained collections (GHSA-mrhx-c7xc-m3w5). The fix is zod 4, a major upgrade. Here zod only validates form input in the user's own browser |
+| `backend/` | **3 high**, one advisory: `deepmerge-ts` < 8, reached through `@prisma/config` and the `prisma` CLI (one entry each). It can exhaust the stack when merging recursive objects (GHSA-ggr8-5vv4-36mx) |
+| `frontend/` | **1 high.** `zod` < 4.6.6 (3.25.76 installed): memory exhaustion when validating oversized constrained collections (GHSA-mrhx-c7xc-m3w5). Here zod only validates form input in the user's own browser |
 
-Next: apply the non-breaking `body-parser` fix, then plan the Prisma 7 and frontend zod 4 upgrades with the test
-suites as the safety net.
+**Known follow-ups.** Neither remaining advisory has a non-breaking fix:
+- `deepmerge-ts` needs Prisma 7.
+- The frontend `zod` issue needs zod 4.
+
+Both are major upgrades, to be planned with the test suites as the safety net.
