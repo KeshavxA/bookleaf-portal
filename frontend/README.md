@@ -185,7 +185,7 @@ Signing in with the wrong role for a URL redirects you to your own home page.
 
 ## Tests
 
-`npm test` runs 83 tests:
+`npm test` runs 89 tests:
 
 - `hooks/useEventStream.test.ts`: auth header, open, event filtering, drops and backoff, 401 stops
   retrying, abort on unmount (`fetch-event-source` is mocked).
