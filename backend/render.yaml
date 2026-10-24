@@ -1,4 +1,4 @@
-# Render Blueprint: Node web service + managed Postgres. NOT YET DEPLOYED - see README "Deploying".
+# Render Blueprint: Node web service + managed Postgres. Deployed (free plan) at https://bookleaf-api-rfcy.onrender.com - see README "Deploying".
 # Dashboard: New > Blueprint > this repo, Blueprint path backend/render.yaml.
 # Render will prompt for two values:
 #   GEMINI_API_KEY  paste it in the Render dashboard only, never in a file
